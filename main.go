@@ -20,17 +20,19 @@ var (
 	rtxn    = regexp.MustCompile(`\d{4}/\d{2}/\d{2}[\W]*(\w.*)`)
 	rto     = regexp.MustCompile(`\W*([:\w]+).*`)
 	rfrom   = regexp.MustCompile(`\W*([:\w]+).*`)
+	racc    = regexp.MustCompile(`^account[\W]+(.*)`)
+	ralias  = regexp.MustCompile(`\balias\s(.*)`)
 )
 
 func assert(err error) {
 	if err != nil {
-		log.Fatal(errors.WithStack(err))
+		log.Fatalf("%+v", errors.WithStack(err))
 	}
 }
 
 func check(ok bool) {
 	if !ok {
-		log.Fatal(errors.Errorf("Should be true, but is false"))
+		log.Fatalf("%+v", errors.Errorf("Should be true, but is false"))
 	}
 }
 
@@ -41,13 +43,14 @@ type txn struct {
 }
 
 type parser struct {
-	s       *bufio.Scanner
-	txns    []txn
-	classes []bayesian.Class
-	cl      *bayesian.Classifier
+	s        *bufio.Scanner
+	txns     []txn
+	classes  []bayesian.Class
+	cl       *bayesian.Classifier
+	accounts map[string]string
 }
 
-func (p *parser) parseTransaction() bool {
+func (p *parser) parseTransactions() {
 	s := p.s
 	var t txn
 	for s.Scan() {
@@ -62,15 +65,35 @@ func (p *parser) parseTransaction() bool {
 		m = rto.FindStringSubmatch(s.Text())
 		check(len(m) > 1)
 		t.to = m[1]
+		if alias, has := p.accounts[t.to]; has {
+			fmt.Printf("%s -> %s\n", t.to, alias)
+			t.to = alias
+		}
 
 		check(s.Scan())
 		m = rfrom.FindStringSubmatch(s.Text())
 		check(len(m) > 1)
 		t.from = m[1]
 		p.txns = append(p.txns, t)
-		return true
 	}
-	return false
+}
+
+func (p *parser) parseAccounts() {
+	p.accounts = make(map[string]string)
+	s := p.s
+	for s.Scan() {
+		m := racc.FindStringSubmatch(s.Text())
+		if len(m) < 2 {
+			continue
+		}
+		acc := m[1]
+
+		check(s.Scan())
+		m = ralias.FindStringSubmatch(s.Text())
+		check(len(m) > 1)
+		ali := m[1]
+		p.accounts[acc] = ali
+	}
 }
 
 func (p *parser) generateClasses() {
@@ -144,9 +167,14 @@ func main() {
 	f, err := os.Open(*journal)
 	assert(err)
 	p := parser{s: bufio.NewScanner(f)}
-	for p.parseTransaction() {
-	}
+	p.parseAccounts()
 
+	// Reset the scanner.
+	f.Seek(0, 0)
+	p.s = bufio.NewScanner(f)
+	p.parseTransactions()
+
+	// Scanning done. Now train classifier.
 	p.generateClasses()
 
 	r := bufio.NewReader(os.Stdin)
