@@ -9,6 +9,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"os/exec"
 	"path"
 	"regexp"
 	"sort"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/jbrukh/bayesian"
 	"github.com/pkg/errors"
 )
@@ -79,7 +81,6 @@ func (p *parser) parseTransactions() {
 		check(len(m) > 1)
 		t.to = m[1]
 		if alias, has := p.accounts[t.to]; has {
-			fmt.Printf("%s -> %s\n", t.to, alias)
 			t.to = alias
 		}
 
@@ -121,7 +122,6 @@ func (p *parser) generateClasses() {
 
 	p.cl = bayesian.NewClassifierTfIdf(p.classes...)
 	for _, t := range p.txns {
-		fmt.Println(strings.Split(t.desc, " "), bayesian.Class(t.to))
 		p.cl.Learn(strings.Split(t.desc, " "), bayesian.Class(t.to))
 	}
 	p.cl.ConvertTermsFreqToTfIdf()
@@ -161,7 +161,6 @@ func (p *parser) topHits(in string) []bayesian.Class {
 	}
 	stddev /= float64(len(scores) - 1)
 	stddev = math.Sqrt(stddev)
-	fmt.Println(len(terms), terms, stddev)
 
 	sort.Sort(byScore(pairs))
 	result := make([]bayesian.Class, 0, 5)
@@ -264,7 +263,168 @@ func parseTransactionsFromCSV(in []byte) []txn {
 	return result
 }
 
+func assignFor(opt string, cl bayesian.Class, keys map[rune]string) bool {
+	for i := 0; i < len(opt); i++ {
+		ch := rune(opt[i])
+		if _, has := keys[ch]; !has {
+			keys[ch] = string(cl)
+			return true
+		}
+	}
+	return false
+}
+
+func generateKeyMap(opts []bayesian.Class) map[rune]string {
+	keys := make(map[rune]string)
+	keys['b'] = ".back"
+	keys['q'] = ".quit"
+	for _, opt := range opts {
+		if ok := assignFor(string(opt), opt, keys); ok {
+			continue
+		}
+		if ok := assignFor(strings.ToUpper(string(opt)), opt, keys); ok {
+			continue
+		}
+		if ok := assignFor("0123456789", opt, keys); ok {
+			continue
+		}
+		log.Fatalf("Unable to assign any key for: %v", opt)
+	}
+	return keys
+}
+
+type kv struct {
+	key rune
+	val string
+}
+
+type byVal []kv
+
+func (b byVal) Len() int {
+	return len(b)
+}
+
+func (b byVal) Less(i int, j int) bool {
+	return b[i].val < b[j].val
+}
+
+func (b byVal) Swap(i int, j int) {
+	b[i], b[j] = b[j], b[i]
+}
+
+var allKeys map[rune]string
+
+func singleCharMode() {
+	// disable input buffering
+	exec.Command("stty", "-F", "/dev/tty", "cbreak", "min", "1").Run()
+	// do not display entered characters on the screen
+	exec.Command("stty", "-F", "/dev/tty", "-echo").Run()
+}
+
+func printSummary(t txn, idx, total int) {
+	color.New(color.BgBlue, color.FgWhite).Printf(" [%2d of %2d] ", idx, total)
+	color.New(color.BgYellow, color.FgBlack).Printf(" %10s ", t.date)
+	desc := t.desc
+	if len(desc) > 40 {
+		desc = desc[:40]
+	}
+	color.New(color.BgWhite, color.FgBlack).Printf(" %-40s", desc)
+	if len(t.to) > 0 {
+		to := t.to
+		if len(to) > 20 {
+			to = to[len(to)-20:]
+		}
+		color.New(color.BgGreen, color.FgBlack).Printf(" %-20s ", to)
+	}
+
+	pomo := color.New(color.BgBlack, color.FgWhite).PrintfFunc()
+	if t.cur > 0 {
+		pomo = color.New(color.BgGreen, color.FgBlack).PrintfFunc()
+	} else {
+		pomo = color.New(color.BgRed, color.FgWhite).PrintfFunc()
+	}
+	pomo(" %7.2f ", t.cur)
+	fmt.Println()
+}
+
+func clear() {
+	cmd := exec.Command("clear")
+	cmd.Stdout = os.Stdout
+	cmd.Run()
+	fmt.Println()
+}
+
+func printAndGetResult(keys map[rune]string, t *txn) int {
+	kvs := make([]kv, 0, len(keys))
+	for k, opt := range keys {
+		kvs = append(kvs, kv{k, opt})
+	}
+	sort.Sort(byVal(kvs))
+	for _, kv := range kvs {
+		fmt.Printf("%q: %s\n", kv.key, kv.val)
+	}
+
+	r := make([]byte, 1)
+	os.Stdin.Read(r)
+	ch := rune(r[0])
+	if ch == 'b' {
+		return -1
+	}
+	if ch == 'q' {
+		return 9999
+	}
+	if ch == rune(10) && len(t.to) > 0 {
+		return 1
+	}
+
+	if opt, has := keys[ch]; has {
+		t.to = opt
+		return 1
+	}
+	return 0
+}
+
+func (p *parser) printTxn(t *txn, idx, total int) int {
+	clear()
+	printSummary(*t, idx, total)
+
+	hits := p.topHits(t.desc)
+	keys := generateKeyMap(hits)
+	res := printAndGetResult(keys, t)
+	if res != 0 {
+		return res
+	}
+
+	clear()
+	printSummary(*t, idx, total)
+	return printAndGetResult(allKeys, t)
+}
+
+func (p *parser) showAndCategorizeTxns(txns []txn) {
+	allKeys = generateKeyMap(p.classes)
+	for i, t := range txns {
+		printSummary(t, i, len(txns))
+	}
+	fmt.Println()
+
+	fmt.Printf("Found %d transactions. Review (Y/n)? ", len(txns))
+	b := make([]byte, 1)
+	os.Stdin.Read(b)
+	if b[0] == 'n' || b[0] == 'q' {
+		return
+	}
+
+	for i := 0; i < len(txns) && i >= 0; {
+		i += p.printTxn(&txns[i], i, len(txns))
+	}
+	for i, t := range txns {
+		printSummary(t, i, len(txns))
+	}
+	fmt.Println()
+}
+
 func main() {
+	singleCharMode()
 	flag.Parse()
 	data, err := ioutil.ReadFile(*journal)
 	assert(err)
@@ -280,21 +440,6 @@ func main() {
 	in, err := ioutil.ReadFile(*csv)
 	assert(err)
 	txns := parseTransactionsFromCSV(in)
-	for _, t := range txns {
-		fmt.Printf("%+v\n", t)
-	}
-	return
 
-	r := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Printf("Input: ")
-		in, err := r.ReadString('\n')
-		assert(err)
-		in = strings.Trim(in, "\n")
-		if len(in) == 0 {
-			break
-		}
-		hits := p.topHits(in)
-		_ = hits
-	}
+	p.showAndCategorizeTxns(txns)
 }
