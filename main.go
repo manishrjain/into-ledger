@@ -12,19 +12,27 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jbrukh/bayesian"
 	"github.com/pkg/errors"
 )
 
 var (
-	journal = flag.String("j", "", "Existing journal to learn from.")
-	rtxn    = regexp.MustCompile(`\d{4}/\d{2}/\d{2}[\W]*(\w.*)`)
-	rto     = regexp.MustCompile(`\W*([:\w]+).*`)
-	rfrom   = regexp.MustCompile(`\W*([:\w]+).*`)
-	racc    = regexp.MustCompile(`^account[\W]+(.*)`)
-	ralias  = regexp.MustCompile(`\balias\s(.*)`)
+	journal  = flag.String("j", "", "Existing journal to learn from.")
+	debug    = flag.Bool("debug", false, "Additional debug information if set.")
+	csv      = flag.String("csv", "", "File path of CSV file containing new transactions.")
+	account  = flag.String("a", "", "Name of bank account to use.")
+	currency = flag.String("c", "", "Set currency if any.")
+	ignore   = flag.String("ic", "", "Comma separated list of colums to ignore in CSV.")
+	rtxn     = regexp.MustCompile(`\d{4}/\d{2}/\d{2}[\W]*(\w.*)`)
+	rto      = regexp.MustCompile(`\W*([:\w]+).*`)
+	rfrom    = regexp.MustCompile(`\W*([:\w]+).*`)
+	racc     = regexp.MustCompile(`^account[\W]+(.*)`)
+	ralias   = regexp.MustCompile(`\balias\s(.*)`)
+	stamp    = "2006/01/02"
 )
 
 func assert(err error) {
@@ -40,9 +48,11 @@ func check(ok bool) {
 }
 
 type txn struct {
+	date string
 	desc string
 	to   string
 	from string
+	cur  float64
 }
 
 type parser struct {
@@ -134,7 +144,7 @@ func (b byScore) Swap(i int, j int) {
 	b[i], b[j] = b[j], b[i]
 }
 
-func (p *parser) top3Hits(in string) {
+func (p *parser) topHits(in string) []bayesian.Class {
 	in = strings.ToLower(in)
 	terms := strings.Split(in, " ")
 	scores, _, _ := p.cl.LogScores(terms)
@@ -154,15 +164,20 @@ func (p *parser) top3Hits(in string) {
 	fmt.Println(len(terms), terms, stddev)
 
 	sort.Sort(byScore(pairs))
+	result := make([]bayesian.Class, 0, 5)
 	last := pairs[0].score
 	for i := 0; i < 5; i++ {
 		pr := pairs[i]
-		fmt.Printf("i=%d s=%f Class=%v\n", i, pr.score, p.classes[pr.pos])
+		if *debug {
+			fmt.Printf("i=%d s=%f Class=%v\n", i, pr.score, p.classes[pr.pos])
+		}
 		if math.Abs(pr.score-last) > stddev {
 			break
 		}
+		result = append(result, p.classes[pr.pos])
 		last = pr.score
 	}
+	return result
 }
 
 func includeAll(dir string, data []byte) []byte {
@@ -184,6 +199,71 @@ func includeAll(dir string, data []byte) []byte {
 	return final
 }
 
+func parseDate(col string) (string, bool) {
+	if tm, err := time.Parse("01/02/2006", col); err == nil {
+		return tm.Format(stamp), true
+	}
+	if tm, err := time.Parse("02/01/2006", col); err == nil {
+		return tm.Format(stamp), true
+	}
+	return "", false
+}
+
+func parseCurrency(col string) (float64, bool) {
+	f, err := strconv.ParseFloat(col, 64)
+	return f, err == nil
+}
+
+func parseDescription(col string) (string, bool) {
+	if len(col) < 2 {
+		return "", false
+	}
+	if col[0] != '"' || col[len(col)-1] != '"' {
+		return "", false
+	}
+	return col[1 : len(col)-1], true
+}
+
+func parseTransactionsFromCSV(in []byte) []txn {
+	s := bufio.NewScanner(bytes.NewReader(in))
+	var t txn
+	ignored := make(map[int]bool)
+	for _, i := range strings.Split(*ignore, ",") {
+		pos, err := strconv.Atoi(i)
+		assert(err)
+		ignored[pos] = true
+	}
+	result := make([]txn, 0, 100)
+	for s.Scan() {
+		t = txn{}
+		line := s.Text()
+		if len(line) == 0 {
+			continue
+		}
+		cols := strings.Split(line, ",")
+		for i, col := range cols {
+			if ignored[i] {
+				continue
+			}
+			if date, ok := parseDate(col); ok {
+				t.date = date
+			}
+			if f, ok := parseCurrency(col); ok {
+				t.cur = f
+			}
+			if d, ok := parseDescription(col); ok {
+				t.desc = d
+			}
+		}
+		if len(t.desc) != 0 && len(t.date) != 0 && t.cur != 0.0 {
+			result = append(result, t)
+		} else {
+			log.Fatalf("Unable to parse txn for [%v]. Got: %+v\n", line, t)
+		}
+	}
+	return result
+}
+
 func main() {
 	flag.Parse()
 	data, err := ioutil.ReadFile(*journal)
@@ -197,6 +277,14 @@ func main() {
 	// Scanning done. Now train classifier.
 	p.generateClasses()
 
+	in, err := ioutil.ReadFile(*csv)
+	assert(err)
+	txns := parseTransactionsFromCSV(in)
+	for _, t := range txns {
+		fmt.Printf("%+v\n", t)
+	}
+	return
+
 	r := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Printf("Input: ")
@@ -206,6 +294,7 @@ func main() {
 		if len(in) == 0 {
 			break
 		}
-		p.top3Hits(in)
+		hits := p.topHits(in)
+		_ = hits
 	}
 }
