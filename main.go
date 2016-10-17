@@ -2,11 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math"
 	"os"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -43,7 +46,7 @@ type txn struct {
 }
 
 type parser struct {
-	s        *bufio.Scanner
+	data     []byte
 	txns     []txn
 	classes  []bayesian.Class
 	cl       *bayesian.Classifier
@@ -51,7 +54,7 @@ type parser struct {
 }
 
 func (p *parser) parseTransactions() {
-	s := p.s
+	s := bufio.NewScanner(bytes.NewReader(p.data))
 	var t txn
 	for s.Scan() {
 		t = txn{}
@@ -80,7 +83,7 @@ func (p *parser) parseTransactions() {
 
 func (p *parser) parseAccounts() {
 	p.accounts = make(map[string]string)
-	s := p.s
+	s := bufio.NewScanner(bytes.NewReader(p.data))
 	for s.Scan() {
 		m := racc.FindStringSubmatch(s.Text())
 		if len(m) < 2 {
@@ -162,16 +165,33 @@ func (p *parser) top3Hits(in string) {
 	}
 }
 
+func includeAll(dir string, data []byte) []byte {
+	final := make([]byte, len(data))
+	copy(final, data)
+
+	b := bytes.NewBuffer(data)
+	s := bufio.NewScanner(b)
+	for s.Scan() {
+		line := s.Text()
+		if !strings.HasPrefix(line, "include ") {
+			continue
+		}
+		fname := strings.Trim(line[8:], " \n")
+		include, err := ioutil.ReadFile(path.Join(dir, fname))
+		assert(err)
+		final = append(final, include...)
+	}
+	return final
+}
+
 func main() {
 	flag.Parse()
-	f, err := os.Open(*journal)
+	data, err := ioutil.ReadFile(*journal)
 	assert(err)
-	p := parser{s: bufio.NewScanner(f)}
-	p.parseAccounts()
+	alldata := includeAll(path.Dir(*journal), data)
 
-	// Reset the scanner.
-	f.Seek(0, 0)
-	p.s = bufio.NewScanner(f)
+	p := parser{data: alldata}
+	p.parseAccounts()
 	p.parseTransactions()
 
 	// Scanning done. Now train classifier.
