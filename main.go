@@ -397,30 +397,32 @@ func (p *parser) printTxn(t *txn, idx, total int) int {
 
 	clear()
 	printSummary(*t, idx, total)
-	return printAndGetResult(allKeys, t)
+	res = printAndGetResult(allKeys, t)
+	if res == 0 {
+		return 1
+	}
+	return res
 }
 
 func (p *parser) showAndCategorizeTxns(txns []txn) {
 	allKeys = generateKeyMap(p.classes)
-	for i, t := range txns {
-		printSummary(t, i, len(txns))
-	}
-	fmt.Println()
+	for {
+		for i, t := range txns {
+			printSummary(t, i, len(txns))
+		}
+		fmt.Println()
 
-	fmt.Printf("Found %d transactions. Review (Y/n)? ", len(txns))
-	b := make([]byte, 1)
-	os.Stdin.Read(b)
-	if b[0] == 'n' || b[0] == 'q' {
-		return
-	}
+		fmt.Printf("Found %d transactions. Review (Y/n/q)? ", len(txns))
+		b := make([]byte, 1)
+		os.Stdin.Read(b)
+		if b[0] == 'n' || b[0] == 'q' {
+			return
+		}
 
-	for i := 0; i < len(txns) && i >= 0; {
-		i += p.printTxn(&txns[i], i, len(txns))
+		for i := 0; i < len(txns) && i >= 0; {
+			i += p.printTxn(&txns[i], i, len(txns))
+		}
 	}
-	for i, t := range txns {
-		printSummary(t, i, len(txns))
-	}
-	fmt.Println()
 }
 
 func main() {
