@@ -24,38 +24,46 @@ import (
 
 var (
 	journal  = flag.String("j", "", "Existing journal to learn from.")
+	output   = flag.String("o", "", "Journal file to write to.")
 	debug    = flag.Bool("debug", false, "Additional debug information if set.")
 	csv      = flag.String("csv", "", "File path of CSV file containing new transactions.")
 	account  = flag.String("a", "", "Name of bank account to use.")
 	currency = flag.String("c", "", "Set currency if any.")
 	ignore   = flag.String("ic", "", "Comma separated list of colums to ignore in CSV.")
-	rtxn     = regexp.MustCompile(`\d{4}/\d{2}/\d{2}[\W]*(\w.*)`)
-	rto      = regexp.MustCompile(`\W*([:\w]+).*`)
+	rtxn     = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
+	rto      = regexp.MustCompile(`\W*([:\w]+)(.*)`)
 	rfrom    = regexp.MustCompile(`\W*([:\w]+).*`)
+	rcur     = regexp.MustCompile(`(\d+\.\d+|\d+)`)
 	racc     = regexp.MustCompile(`^account[\W]+(.*)`)
 	ralias   = regexp.MustCompile(`\balias\s(.*)`)
 	stamp    = "2006/01/02"
 )
 
-func assert(err error) {
+func check(err error) {
 	if err != nil {
 		log.Fatalf("%+v", errors.WithStack(err))
 	}
 }
 
-func check(ok bool) {
+func assert(ok bool) {
 	if !ok {
 		log.Fatalf("%+v", errors.Errorf("Should be true, but is false"))
 	}
 }
 
 type txn struct {
-	date string
+	date time.Time
 	desc string
 	to   string
 	from string
 	cur  float64
 }
+
+type byTime []txn
+
+func (b byTime) Len() int               { return len(b) }
+func (b byTime) Less(i int, j int) bool { return !b[i].date.After(b[j].date) }
+func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
 
 type parser struct {
 	data     []byte
@@ -68,25 +76,33 @@ type parser struct {
 func (p *parser) parseTransactions() {
 	s := bufio.NewScanner(bytes.NewReader(p.data))
 	var t txn
+	var err error
 	for s.Scan() {
 		t = txn{}
 		m := rtxn.FindStringSubmatch(s.Text())
-		if len(m) < 2 {
+		if len(m) < 3 {
 			continue
 		}
-		t.desc = strings.ToLower(m[1])
+		t.date, err = time.Parse(stamp, m[1])
+		check(err)
+		t.desc = m[2]
 
-		check(s.Scan())
+		assert(s.Scan())
 		m = rto.FindStringSubmatch(s.Text())
-		check(len(m) > 1)
+		assert(len(m) > 1)
 		t.to = m[1]
 		if alias, has := p.accounts[t.to]; has {
 			t.to = alias
 		}
+		m = rcur.FindStringSubmatch(m[2])
+		if len(m) > 1 {
+			t.cur, err = strconv.ParseFloat(m[1], 64)
+			check(err)
+		}
 
-		check(s.Scan())
+		assert(s.Scan())
 		m = rfrom.FindStringSubmatch(s.Text())
-		check(len(m) > 1)
+		assert(len(m) > 1)
 		t.from = m[1]
 		p.txns = append(p.txns, t)
 	}
@@ -102,9 +118,9 @@ func (p *parser) parseAccounts() {
 		}
 		acc := m[1]
 
-		check(s.Scan())
+		assert(s.Scan())
 		m = ralias.FindStringSubmatch(s.Text())
-		check(len(m) > 1)
+		assert(len(m) > 1)
 		ali := m[1]
 		p.accounts[acc] = ali
 	}
@@ -122,7 +138,8 @@ func (p *parser) generateClasses() {
 
 	p.cl = bayesian.NewClassifierTfIdf(p.classes...)
 	for _, t := range p.txns {
-		p.cl.Learn(strings.Split(t.desc, " "), bayesian.Class(t.to))
+		desc := strings.ToLower(t.desc)
+		p.cl.Learn(strings.Split(desc, " "), bayesian.Class(t.to))
 	}
 	p.cl.ConvertTermsFreqToTfIdf()
 }
@@ -192,20 +209,20 @@ func includeAll(dir string, data []byte) []byte {
 		}
 		fname := strings.Trim(line[8:], " \n")
 		include, err := ioutil.ReadFile(path.Join(dir, fname))
-		assert(err)
+		check(err)
 		final = append(final, include...)
 	}
 	return final
 }
 
-func parseDate(col string) (string, bool) {
+func parseDate(col string) (time.Time, bool) {
 	if tm, err := time.Parse("01/02/2006", col); err == nil {
-		return tm.Format(stamp), true
+		return tm, true
 	}
 	if tm, err := time.Parse("02/01/2006", col); err == nil {
-		return tm.Format(stamp), true
+		return tm, true
 	}
-	return "", false
+	return time.Time{}, false
 }
 
 func parseCurrency(col string) (float64, bool) {
@@ -229,7 +246,7 @@ func parseTransactionsFromCSV(in []byte) []txn {
 	ignored := make(map[int]bool)
 	for _, i := range strings.Split(*ignore, ",") {
 		pos, err := strconv.Atoi(i)
-		assert(err)
+		check(err)
 		ignored[pos] = true
 	}
 	result := make([]txn, 0, 100)
@@ -254,7 +271,7 @@ func parseTransactionsFromCSV(in []byte) []txn {
 				t.desc = d
 			}
 		}
-		if len(t.desc) != 0 && len(t.date) != 0 && t.cur != 0.0 {
+		if len(t.desc) != 0 && !t.date.IsZero() && t.cur != 0.0 {
 			result = append(result, t)
 		} else {
 			log.Fatalf("Unable to parse txn for [%v]. Got: %+v\n", line, t)
@@ -323,8 +340,13 @@ func singleCharMode() {
 }
 
 func printSummary(t txn, idx, total int) {
-	color.New(color.BgBlue, color.FgWhite).Printf(" [%2d of %2d] ", idx, total)
-	color.New(color.BgYellow, color.FgBlack).Printf(" %10s ", t.date)
+	if total > 0 {
+		color.New(color.BgBlue, color.FgWhite).Printf(" [%2d of %2d] ", idx, total)
+	} else {
+		// A bit of a hack, but will do.
+		color.New(color.BgBlue, color.FgWhite).Printf(" [DUPLICATE] ")
+	}
+	color.New(color.BgYellow, color.FgBlack).Printf(" %10s ", t.date.Format(stamp))
 	desc := t.desc
 	if len(desc) > 40 {
 		desc = desc[:40]
@@ -432,12 +454,72 @@ func (p *parser) showAndCategorizeTxns(txns []txn) {
 	}
 }
 
+func ledgerFormat(t txn) string {
+	var b bytes.Buffer
+	b.WriteString(fmt.Sprintf("%s\t%s\n", t.date.Format(stamp), t.desc))
+	b.WriteString(fmt.Sprintf("\t%-20s\t%.2f\n", t.to, t.cur))
+	b.WriteString(fmt.Sprintf("\t%s\n", t.from))
+	return b.String()
+}
+
+func (p *parser) removeDuplicates(txns []txn) []txn {
+	if len(txns) == 0 {
+		return txns
+	}
+
+	sort.Sort(byTime(p.txns))
+	//for _, pt := range p.txns {
+	//fmt.Printf("[%s] %v [%f]\n", pt.date.Format(stamp), pt.desc, pt.cur)
+	//}
+	sort.Sort(byTime(txns))
+
+	prev := p.txns
+	first := txns[0].date.Add(-24 * time.Hour)
+	for i, t := range p.txns {
+		if t.date.After(first) {
+			prev = p.txns[i:]
+			break
+		}
+	}
+
+	final := txns[:0]
+	for _, t := range txns {
+		var found bool
+		for _, pr := range prev {
+			if pr.date.After(t.date) {
+				break
+			}
+			if pr.desc == t.desc && pr.date.Equal(t.date) && math.Abs(pr.cur) == math.Abs(t.cur) {
+				printSummary(t, 0, 0)
+				found = true
+				break
+			}
+		}
+		if !found {
+			final = append(final, t)
+		}
+	}
+	fmt.Printf("\t%d duplicates found and ignored.\n\n", len(txns)-len(final))
+	return final
+}
+
 func main() {
 	singleCharMode()
 	flag.Parse()
 	data, err := ioutil.ReadFile(*journal)
-	assert(err)
+	check(err)
 	alldata := includeAll(path.Dir(*journal), data)
+
+	if _, err := os.Stat(*output); os.IsNotExist(err) {
+		_, err := os.Create(*output)
+		check(err)
+	}
+	of, err := os.Open(*output)
+	check(err)
+	odata, err := ioutil.ReadAll(of)
+	check(err)
+	// fmt.Printf("%s\n", string(odata))
+	alldata = append(alldata, odata...)
 
 	p := parser{data: alldata}
 	p.parseAccounts()
@@ -447,8 +529,9 @@ func main() {
 	p.generateClasses()
 
 	in, err := ioutil.ReadFile(*csv)
-	assert(err)
+	check(err)
 	txns := parseTransactionsFromCSV(in)
 
+	txns = p.removeDuplicates(txns)
 	p.showAndCategorizeTxns(txns)
 }
