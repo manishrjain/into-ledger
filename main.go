@@ -278,6 +278,7 @@ func generateKeyMap(opts []bayesian.Class) map[rune]string {
 	keys := make(map[rune]string)
 	keys['b'] = ".back"
 	keys['q'] = ".quit"
+	keys['a'] = ".show all"
 	for _, opt := range opts {
 		if ok := assignFor(string(opt), opt, keys); ok {
 			continue
@@ -360,7 +361,12 @@ func printAndGetResult(keys map[rune]string, t *txn) int {
 		kvs = append(kvs, kv{k, opt})
 	}
 	sort.Sort(byVal(kvs))
+	var blank bool
 	for _, kv := range kvs {
+		if kv.val[0] != '.' && !blank {
+			blank = true
+			fmt.Println()
+		}
 		fmt.Printf("%q: %s\n", kv.key, kv.val)
 	}
 
@@ -373,13 +379,14 @@ func printAndGetResult(keys map[rune]string, t *txn) int {
 	if ch == 'q' {
 		return 9999
 	}
+	if ch == 'a' {
+		return math.MaxInt16
+	}
 	if ch == rune(10) && len(t.to) > 0 {
 		return 1
 	}
-
 	if opt, has := keys[ch]; has {
 		t.to = opt
-		return 1
 	}
 	return 0
 }
@@ -391,24 +398,24 @@ func (p *parser) printTxn(t *txn, idx, total int) int {
 	hits := p.topHits(t.desc)
 	keys := generateKeyMap(hits)
 	res := printAndGetResult(keys, t)
-	if res != 0 {
+	if res != math.MaxInt16 {
 		return res
 	}
 
 	clear()
 	printSummary(*t, idx, total)
 	res = printAndGetResult(allKeys, t)
-	if res == 0 {
-		return 1
-	}
 	return res
 }
 
 func (p *parser) showAndCategorizeTxns(txns []txn) {
 	allKeys = generateKeyMap(p.classes)
 	for {
-		for i, t := range txns {
-			printSummary(t, i, len(txns))
+		for i := range txns {
+			t := &txns[i]
+			hits := p.topHits(t.desc)
+			t.to = string(hits[0])
+			printSummary(*t, i, len(txns))
 		}
 		fmt.Println()
 
