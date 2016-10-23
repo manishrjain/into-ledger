@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"encoding/csv"
 	"encoding/gob"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"math"
@@ -29,9 +31,11 @@ var (
 	journal    = flag.String("j", "", "Existing journal to learn from.")
 	output     = flag.String("o", "", "Journal file to write to.")
 	debug      = flag.Bool("debug", false, "Additional debug information if set.")
-	csv        = flag.String("csv", "", "File path of CSV file containing new transactions.")
+	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
 	account    = flag.String("a", "", "Name of bank account transactions belong to.")
 	currency   = flag.String("c", "", "Set currency if any.")
+	dateFormat = flag.String("d", "01/02/2006", "Defaults to MM/DD/YYYY. "+
+		"Express your date format in terms of Jan 02, 2006. See: https://golang.org/pkg/time/")
 	ignore     = flag.String("ic", "", "Comma separated list of colums to ignore in CSV.")
 	rtxn       = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto        = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -223,10 +227,8 @@ func includeAll(dir string, data []byte) []byte {
 }
 
 func parseDate(col string) (time.Time, bool) {
-	if tm, err := time.Parse("01/02/2006", col); err == nil {
-		return tm, true
-	}
-	if tm, err := time.Parse("02/01/2006", col); err == nil {
+	tm, err := time.Parse(*dateFormat, col)
+	if err == nil {
 		return tm, true
 	}
 	return time.Time{}, false
@@ -238,17 +240,17 @@ func parseCurrency(col string) (float64, bool) {
 }
 
 func parseDescription(col string) (string, bool) {
-	if len(col) < 2 {
-		return "", false
-	}
-	if col[0] != '"' || col[len(col)-1] != '"' {
-		return "", false
-	}
-	return col[1 : len(col)-1], true
+	return strings.Map(func(r rune) rune {
+		if r == '"' {
+			return -1
+		}
+		return r
+	}, col), true
 }
 
 func parseTransactionsFromCSV(in []byte) []txn {
-	s := bufio.NewScanner(bytes.NewReader(in))
+	r := csv.NewReader(bytes.NewReader(in))
+	// s := bufio.NewScanner(bytes.NewReader(in))
 	var t txn
 	ignored := make(map[int]bool)
 	for _, i := range strings.Split(*ignore, ",") {
@@ -257,36 +259,35 @@ func parseTransactionsFromCSV(in []byte) []txn {
 		ignored[pos] = true
 	}
 	result := make([]txn, 0, 100)
-	for s.Scan() {
+	for {
 		t = txn{Key: make([]byte, 16)}
 		// Have a unique key for each transaction in CSV, so we can unique identify and
 		// persist them as we modify their category.
 		_, err := rand.Read(t.Key)
+		cols, err := r.Read()
+		if err == io.EOF {
+			break
+		}
 		check(err)
 
-		line := s.Text()
-		if len(line) == 0 {
-			continue
-		}
-		cols := strings.Split(line, ",")
 		for i, col := range cols {
 			if ignored[i] {
 				continue
 			}
 			if date, ok := parseDate(col); ok {
 				t.Date = date
-			}
-			if f, ok := parseCurrency(col); ok {
+
+			} else if f, ok := parseCurrency(col); ok {
 				t.Cur = f
-			}
-			if d, ok := parseDescription(col); ok {
+
+			} else if d, ok := parseDescription(col); ok {
 				t.Desc = d
 			}
 		}
 		if len(t.Desc) != 0 && !t.Date.IsZero() && t.Cur != 0.0 {
 			result = append(result, t)
 		} else {
-			log.Fatalf("Unable to parse txn for [%v]. Got: %+v\n", line, t)
+			log.Fatalf("Unable to parse txn for [%v]. Got: %+v\n", cols, t)
 		}
 	}
 	return result
@@ -382,7 +383,7 @@ func printSummary(t txn, idx, total int) {
 	color.New(color.BgWhite, color.FgBlack).Printf(" %-40s", desc)
 	printCategory(t)
 
-	color.New(color.BgRed, color.FgWhite).Printf(" %7.2f %3s ", t.Cur, t.CurName)
+	color.New(color.BgRed, color.FgWhite).Printf(" %9.2f %3s ", t.Cur, t.CurName)
 	fmt.Println()
 }
 
@@ -647,7 +648,7 @@ func main() {
 	// Scanning done. Now train classifier.
 	p.generateClasses()
 
-	in, err := ioutil.ReadFile(*csv)
+	in, err := ioutil.ReadFile(*csvFile)
 	check(err)
 	txns := parseTransactionsFromCSV(in)
 	for i := range txns {
