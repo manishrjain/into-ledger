@@ -30,7 +30,7 @@ var (
 	output     = flag.String("o", "", "Journal file to write to.")
 	debug      = flag.Bool("debug", false, "Additional debug information if set.")
 	csv        = flag.String("csv", "", "File path of CSV file containing new transactions.")
-	account    = flag.String("a", "", "Name of bank account to use.")
+	account    = flag.String("a", "", "Name of bank account transactions belong to.")
 	currency   = flag.String("c", "", "Set currency if any.")
 	ignore     = flag.String("ic", "", "Comma separated list of colums to ignore in CSV.")
 	rtxn       = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
@@ -352,16 +352,19 @@ func singleCharMode() {
 }
 
 func printCategory(t txn) {
-	prefix := "TO:"
+	prefix := "[DR]"
 	cat := t.To
 	if t.Cur > 0 {
-		prefix = "FR:"
+		prefix = "[CR]"
 		cat = t.From
+	}
+	if len(cat) == 0 {
+		return
 	}
 	if len(cat) > 20 {
 		cat = cat[len(cat)-20:]
 	}
-	color.New(color.BgGreen, color.FgBlack).Printf(" %3s %-20s ", prefix, cat)
+	color.New(color.BgGreen, color.FgBlack).Printf(" %4s %-20s ", prefix, cat)
 }
 
 func printSummary(t txn, idx, total int) {
@@ -379,13 +382,7 @@ func printSummary(t txn, idx, total int) {
 	color.New(color.BgWhite, color.FgBlack).Printf(" %-40s", desc)
 	printCategory(t)
 
-	pomo := color.New(color.BgBlack, color.FgWhite).PrintfFunc()
-	if t.Cur > 0 {
-		pomo = color.New(color.BgGreen, color.FgBlack).PrintfFunc()
-	} else {
-		pomo = color.New(color.BgRed, color.FgWhite).PrintfFunc()
-	}
-	pomo(" %7.2f %3s ", t.Cur, t.CurName)
+	color.New(color.BgRed, color.FgWhite).Printf(" %7.2f %3s ", t.Cur, t.CurName)
 	fmt.Println()
 }
 
@@ -518,9 +515,38 @@ func (p *parser) showAndCategorizeTxns(txns []txn) {
 func ledgerFormat(t txn) string {
 	var b bytes.Buffer
 	b.WriteString(fmt.Sprintf("%s\t%s\n", t.Date.Format(stamp), t.Desc))
-	b.WriteString(fmt.Sprintf("\t%-20s\t%.2f%s\n", t.To, t.Cur, t.CurName))
+	b.WriteString(fmt.Sprintf("\t%-20s\t%.2f%s\n", t.To, math.Abs(t.Cur), t.CurName))
 	b.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
 	return b.String()
+}
+
+func sanitize(a string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' {
+			return r
+		}
+		if r >= 'A' && r <= 'Z' {
+			return r
+		}
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		switch r {
+		case '*':
+			fallthrough
+		case ':':
+			fallthrough
+		case '/':
+			fallthrough
+		case '.':
+			fallthrough
+		case '-':
+			return r
+		default:
+			return -1
+		}
+		return -1
+	}, a)
 }
 
 func (p *parser) removeDuplicates(txns []txn) []txn {
@@ -529,9 +555,6 @@ func (p *parser) removeDuplicates(txns []txn) []txn {
 	}
 
 	sort.Sort(byTime(p.txns))
-	//for _, pt := range p.txns {
-	//fmt.Printf("[%s] %v [%f]\n", pt.date.Format(stamp), pt.desc, pt.cur)
-	//}
 	sort.Sort(byTime(txns))
 
 	prev := p.txns
@@ -546,11 +569,13 @@ func (p *parser) removeDuplicates(txns []txn) []txn {
 	final := txns[:0]
 	for _, t := range txns {
 		var found bool
+		tdesc := sanitize(t.Desc)
 		for _, pr := range prev {
 			if pr.Date.After(t.Date) {
 				break
 			}
-			if pr.Desc == t.Desc && pr.Date.Equal(t.Date) && math.Abs(pr.Cur) == math.Abs(t.Cur) {
+			pdesc := sanitize(pr.Desc)
+			if tdesc == pdesc && pr.Date.Equal(t.Date) && math.Abs(pr.Cur) == math.Abs(t.Cur) {
 				printSummary(t, 0, 0)
 				found = true
 				break
@@ -639,6 +664,10 @@ func main() {
 
 	final := p.iterateDB()
 	sort.Sort(byTime(final))
+
+	_, err = of.WriteString(fmt.Sprintf("; into-ledger run at %v\n\n", time.Now()))
+	check(err)
+
 	for _, t := range final {
 		if _, err := of.WriteString(ledgerFormat(t)); err != nil {
 			log.Fatalf("Unable to write to output: %v", err)
