@@ -35,8 +35,8 @@ var (
 	account    = flag.String("a", "", "Name of bank account transactions belong to.")
 	currency   = flag.String("c", "", "Set currency if any.")
 	dateFormat = flag.String("d", "01/02/2006", "Defaults to MM/DD/YYYY. "+
-		"Express your date format in terms of Jan 02, 2006. See: https://golang.org/pkg/time/")
-	ignore     = flag.String("ic", "", "Comma separated list of colums to ignore in CSV.")
+		"Express your date format w.r.t. Jan 02, 2006. See: https://golang.org/pkg/time/")
+	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
 	rtxn       = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto        = regexp.MustCompile(`\W*([:\w]+)(.*)`)
 	rfrom      = regexp.MustCompile(`\W*([:\w]+).*`)
