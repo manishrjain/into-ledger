@@ -24,6 +24,7 @@ import (
 	"github.com/boltdb/bolt"
 	"github.com/fatih/color"
 	"github.com/jbrukh/bayesian"
+	"github.com/manishrjain/keys"
 	"github.com/pkg/errors"
 )
 
@@ -34,17 +35,23 @@ var (
 	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
 	account    = flag.String("a", "", "Name of bank account transactions belong to.")
 	currency   = flag.String("c", "", "Set currency if any.")
+	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
 	dateFormat = flag.String("d", "01/02/2006", "Defaults to MM/DD/YYYY. "+
 		"Express your date format w.r.t. Jan 02, 2006. See: https://golang.org/pkg/time/")
-	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
-	rtxn       = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
-	rto        = regexp.MustCompile(`\W*([:\w]+)(.*)`)
-	rfrom      = regexp.MustCompile(`\W*([:\w]+).*`)
-	rcur       = regexp.MustCompile(`(\d+\.\d+|\d+)`)
-	racc       = regexp.MustCompile(`^account[\W]+(.*)`)
-	ralias     = regexp.MustCompile(`\balias\s(.*)`)
+	config = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
+		"Config file to store keyboard shortcuts in.")
+
+	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
+	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
+	rfrom  = regexp.MustCompile(`\W*([:\w]+).*`)
+	rcur   = regexp.MustCompile(`(\d+\.\d+|\d+)`)
+	racc   = regexp.MustCompile(`^account[\W]+(.*)`)
+	ralias = regexp.MustCompile(`\balias\s(.*)`)
+
 	stamp      = "2006/01/02"
 	bucketName = []byte("txns")
+	descLength = 40
+	allKeys    *keys.Shortcuts
 )
 
 func check(err error) {
@@ -134,6 +141,10 @@ func (p *parser) parseAccounts() {
 		assert(len(m) > 1)
 		ali := m[1]
 		p.accounts[acc] = ali
+	}
+
+	for _, alias := range p.accounts {
+		allKeys.AutoAssign(alias)
 	}
 }
 
@@ -304,6 +315,12 @@ func assignFor(opt string, cl bayesian.Class, keys map[rune]string) bool {
 	return false
 }
 
+func setDefaultMappings(ks *keys.Shortcuts) {
+	ks.Assign('b', ".back")
+	ks.Assign('q', ".quit")
+	ks.Assign('a', ".show all")
+}
+
 func generateKeyMap(opts []bayesian.Class) map[rune]string {
 	keys := make(map[rune]string)
 	keys['b'] = ".back"
@@ -343,8 +360,6 @@ func (b byVal) Swap(i int, j int) {
 	b[i], b[j] = b[j], b[i]
 }
 
-var allKeys map[rune]string
-
 func singleCharMode() {
 	// disable input buffering
 	exec.Command("stty", "-F", "/dev/tty", "cbreak", "min", "1").Run()
@@ -353,10 +368,10 @@ func singleCharMode() {
 }
 
 func printCategory(t txn) {
-	prefix := "[DR]"
+	prefix := "[TO]"
 	cat := t.To
 	if t.Cur > 0 {
-		prefix = "[CR]"
+		prefix = "[FROM]"
 		cat = t.From
 	}
 	if len(cat) == 0 {
@@ -365,22 +380,29 @@ func printCategory(t txn) {
 	if len(cat) > 20 {
 		cat = cat[len(cat)-20:]
 	}
-	color.New(color.BgGreen, color.FgBlack).Printf(" %4s %-20s ", prefix, cat)
+	color.New(color.BgGreen, color.FgBlack).Printf(" %6s %-20s ", prefix, cat)
 }
 
 func printSummary(t txn, idx, total int) {
-	if total > 0 {
+	if total > 999 {
+		color.New(color.BgBlue, color.FgWhite).Printf(" [%4d of %4d] ", idx, total)
+	} else if total > 99 {
+		color.New(color.BgBlue, color.FgWhite).Printf(" [%3d of %3d] ", idx, total)
+	} else if total > 0 {
 		color.New(color.BgBlue, color.FgWhite).Printf(" [%2d of %2d] ", idx, total)
-	} else {
+	} else if total == 0 {
 		// A bit of a hack, but will do.
 		color.New(color.BgBlue, color.FgWhite).Printf(" [DUPLICATE] ")
+	} else {
+		log.Fatalf("Unhandled case for total: %v", total)
 	}
+
 	color.New(color.BgYellow, color.FgBlack).Printf(" %10s ", t.Date.Format(stamp))
 	desc := t.Desc
-	if len(desc) > 40 {
-		desc = desc[:40]
+	if len(desc) > descLength {
+		desc = desc[:descLength]
 	}
-	color.New(color.BgWhite, color.FgBlack).Printf(" %-40s", desc)
+	color.New(color.BgWhite, color.FgBlack).Printf(" %-40s", desc) // descLength used in Printf.
 	printCategory(t)
 
 	color.New(color.BgRed, color.FgWhite).Printf(" %9.2f %3s ", t.Cur, t.CurName)
@@ -427,38 +449,26 @@ func (p *parser) iterateDB() []txn {
 	return txns
 }
 
-func (p *parser) printAndGetResult(keys map[rune]string, t *txn) int {
-	kvs := make([]kv, 0, len(keys))
-	for k, opt := range keys {
-		kvs = append(kvs, kv{k, opt})
-	}
-	sort.Sort(byVal(kvs))
-	var blank bool
-	for _, kv := range kvs {
-		if kv.val[0] != '.' && !blank {
-			blank = true
-			fmt.Println()
-		}
-		fmt.Printf("%q: %s\n", kv.key, kv.val)
-	}
+func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) int {
+	ks.Print()
 
 	r := make([]byte, 1)
 	os.Stdin.Read(r)
 	ch := rune(r[0])
-	if ch == 'b' {
-		return -1
-	}
-	if ch == 'q' {
-		return 9999
-	}
-	if ch == 'a' {
-		return math.MaxInt16
-	}
 	if ch == rune(10) && len(t.To) > 0 && len(t.From) > 0 {
 		p.writeToDB(*t)
 		return 1
 	}
-	if opt, has := keys[ch]; has {
+
+	if opt, has := ks.MapsTo(ch); has {
+		switch opt {
+		case ".back":
+			return -1
+		case ".quit":
+			return 9999
+		case ".show all":
+			return math.MaxInt16
+		}
 		if t.Cur > 0 {
 			t.From = opt
 		} else {
@@ -471,22 +481,31 @@ func (p *parser) printAndGetResult(keys map[rune]string, t *txn) int {
 func (p *parser) printTxn(t *txn, idx, total int) int {
 	clear()
 	printSummary(*t, idx, total)
+	if len(t.Desc) > descLength {
+		fmt.Println()
+		color.New(color.BgWhite, color.FgBlack).Printf("[DESC] %s ", t.Desc) // descLength used in Printf.
+		fmt.Println()
+		fmt.Println()
+	}
 
 	hits := p.topHits(t.Desc)
-	keys := generateKeyMap(hits)
-	res := p.printAndGetResult(keys, t)
+	var ks keys.Shortcuts
+	setDefaultMappings(&ks)
+	for _, hit := range hits {
+		ks.AutoAssign(string(hit))
+	}
+	res := p.printAndGetResult(ks, t)
 	if res != math.MaxInt16 {
 		return res
 	}
 
 	clear()
 	printSummary(*t, idx, total)
-	res = p.printAndGetResult(allKeys, t)
+	res = p.printAndGetResult(*allKeys, t)
 	return res
 }
 
 func (p *parser) showAndCategorizeTxns(txns []txn) {
-	allKeys = generateKeyMap(p.classes)
 	for {
 		for i := range txns {
 			t := &txns[i]
@@ -602,6 +621,10 @@ func oerr(msg string) {
 func main() {
 	singleCharMode()
 	flag.Parse()
+
+	allKeys = keys.ParseConfig(*config)
+	setDefaultMappings(allKeys)
+	defer allKeys.Persist()
 
 	if len(*account) == 0 {
 		oerr("Please specify the account transactions are coming from")
