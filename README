@@ -50,5 +50,10 @@ $ into-ledger -j ~/ledger/journal.ldg -csv ~/ledger/Activity.CSV --ic "0,1" -o o
 Screenshots
 -----------
 
-![list of transactions]list.png
-![duplicate detection]duplicates.png
+Parse transactions from CSV
+
+![list of transactions](list.png)
+
+Detect duplicates transactions in CSV, which are already present in ledger journal.
+
+![duplicate detection](duplicates.png)
