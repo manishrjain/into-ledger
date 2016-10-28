@@ -112,7 +112,6 @@ func (p *parser) parseTransactions() {
 		if alias, has := p.accounts[t.To]; has {
 			t.To = alias
 		}
-		allKeys.AutoAssign(t.To)
 		m = rcur.FindStringSubmatch(m[2])
 		if len(m) > 1 {
 			t.Cur, err = strconv.ParseFloat(m[1], 64)
@@ -123,6 +122,11 @@ func (p *parser) parseTransactions() {
 		m = rfrom.FindStringSubmatch(s.Text())
 		assert(len(m) > 1)
 		t.From = m[1]
+		if alias, has := p.accounts[t.From]; has {
+			t.From = alias
+		}
+		allKeys.AutoAssign(t.To)
+		allKeys.AutoAssign(t.From)
 		p.txns = append(p.txns, t)
 	}
 }
