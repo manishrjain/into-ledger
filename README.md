@@ -18,6 +18,7 @@ go get -v -u github.com/manishrjain/into-ledger
 
 Help
 ----
+```
 $ into-ledger --help
 Usage of into-ledger:
   -a string
@@ -38,6 +39,7 @@ Usage of into-ledger:
     	Existing journal to learn from.
   -o string
     	Journal file to write to.
+```
 
 
 Usage
