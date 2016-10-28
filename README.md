@@ -3,12 +3,12 @@ into-ledger
 into-ledger helps categorization of CSV transactions and conversion into ledger format. It makes importing hundreds of transactions into ledger a breeze.
 
 Features:
-- Uses a much more accurate tf-idf expense classifier than used by cantino/reckon.
-- Correctly parses your existing journal file, handling all includes and account aliases.
-- Assigns dynamic keyboard shortcuts, so classifying transactions is just a keystroke away.
-- Uses temporary storage (boltdb) to persist transactions that you have categorized or acknowledged to be correctly categorized, so you can quit whenver you want, without the risk of losing the work done so far.
-- Deduplicates incoming transactions from CSV against the transactions already present in ledger journal. This allows an easy resume from a broken workflow.
-- Colors and formatting, because it's not just about getting things done. It's also about making them look nice!
+- *Accurate*             : Uses a much more accurate tf-idf expense classifier than used by cantino/reckon.
+- *Includes and Aliases* : Correctly parses your existing journal file, handling all includes and account aliases.
+- *Keyboard Shortcuts*   : Assigns dynamic keyboard shortcuts, so classifying transactions is just a keystroke away.
+- *Auto save*            : Uses temporary storage (boltdb) to persist transactions that you have categorized or acknowledged to be correctly categorized, so you can quit whenver you want, without the risk of losing the work done so far.
+- *Deduplication*        : Deduplicates incoming transactions from CSV against the transactions already present in ledger journal. This allows an easy resume from a broken workflow.
+- *Nice UI*              : Colors and formatting, because it's not just about getting things done. It's also about making them look nice!
 
 
 Install
