@@ -24,6 +24,8 @@ Usage of into-ledger:
     	Name of bank account transactions belong to.
   -c string
     	Set currency if any.
+  -conf string
+	    	Config file to store keyboard shortcuts in. (default "/home/mrjn/.into-ledger")
   -csv string
     	File path of CSV file containing new transactions.
   -d string
@@ -41,19 +43,25 @@ Usage of into-ledger:
 Usage
 -----
 
+```
 # Importing from Citibank Australia
 $ into-ledger -j ~/ledger/journal.ldg -csv ~/ledger/ACCT_464_25_07_2016.csv --ic "3,4" -o out.data -a citi -c AUD -d "02/01/2006"
 
 # Importing from Chase USA
 $ into-ledger -j ~/ledger/journal.ldg -csv ~/ledger/Activity.CSV --ic "0,1" -o out.data -a chase -c USD
+```
 
 Screenshots
 -----------
 
-Parse transactions from CSV
+**Parse transactions from CSV, and show automatically picked categories to be reviewed.**
 
 ![list of transactions](list.png)
 
-Detect duplicates transactions in CSV, which are already present in ledger journal.
+**Detect duplicates transactions in CSV, which are already present in ledger journal.**
 
 ![duplicate detection](duplicates.png)
+
+**Categorize transaction using persistent and dynamic keyboard shortcuts.**
+
+![categorize transaction](txn.png)
