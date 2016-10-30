@@ -30,11 +30,11 @@ import (
 
 var (
 	journal    = flag.String("j", "", "Existing journal to learn from.")
-	output     = flag.String("o", "", "Journal file to write to.")
+	output     = flag.String("o", "out.ldg", "Journal file to write to.")
 	debug      = flag.Bool("debug", false, "Additional debug information if set.")
 	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
 	account    = flag.String("a", "", "Name of bank account transactions belong to.")
-	currency   = flag.String("c", "", "Set currency if any.")
+	currency   = flag.String("c", "$", "Set currency if any.")
 	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
 	dateFormat = flag.String("d", "01/02/2006", "Defaults to MM/DD/YYYY. "+
 		"Express your date format w.r.t. Jan 02, 2006. See: https://golang.org/pkg/time/")
@@ -67,13 +67,14 @@ func assert(ok bool) {
 }
 
 type txn struct {
-	Date    time.Time
-	Desc    string
-	To      string
-	From    string
-	Cur     float64
-	CurName string
-	Key     []byte
+	Date               time.Time
+	Desc               string
+	To                 string
+	From               string
+	Cur                float64
+	CurName            string
+	Key                []byte
+	skipClassification bool
 }
 
 type byTime []txn
@@ -92,42 +93,42 @@ type parser struct {
 }
 
 func (p *parser) parseTransactions() {
-	s := bufio.NewScanner(bytes.NewReader(p.data))
+	out, err := exec.Command("ledger", "-f", *journal, "csv").Output()
+	check(err)
+	r := csv.NewReader(bytes.NewReader(out))
 	var t txn
-	var err error
-	for s.Scan() {
-		t = txn{}
-		m := rtxn.FindStringSubmatch(s.Text())
-		if len(m) < 3 {
-			continue
+	for {
+		cols, err := r.Read()
+		if err == io.EOF {
+			break
 		}
-		t.Date, err = time.Parse(stamp, m[1])
 		check(err)
-		t.Desc = m[2]
 
-		assert(s.Scan())
-		m = rto.FindStringSubmatch(s.Text())
-		assert(len(m) > 1)
-		t.To = m[1]
+		t = txn{}
+		t.Date, err = time.Parse(stamp, cols[0])
+		check(err)
+		t.Desc = strings.Trim(cols[2], " \n\t")
+
+		t.To = cols[3]
+		assert(len(t.To) > 0)
+		if strings.HasPrefix(t.To, "Assets:Reimbursements:") {
+			// pass
+		} else if strings.HasPrefix(t.To, "Assets:") {
+			// Don't pick up Assets.
+			t.skipClassification = true
+		} else if strings.HasPrefix(t.To, "Equity:") {
+			// Don't pick up Equity.
+			t.skipClassification = true
+		}
 		if alias, has := p.accounts[t.To]; has {
 			t.To = alias
 		}
-		m = rcur.FindStringSubmatch(m[2])
-		if len(m) > 1 {
-			t.Cur, err = strconv.ParseFloat(m[1], 64)
-			check(err)
-		}
-
-		assert(s.Scan())
-		m = rfrom.FindStringSubmatch(s.Text())
-		assert(len(m) > 1)
-		t.From = m[1]
-		if alias, has := p.accounts[t.From]; has {
-			t.From = alias
-		}
-		allKeys.AutoAssign(t.To)
-		allKeys.AutoAssign(t.From)
+		t.CurName = cols[4]
+		t.Cur, err = strconv.ParseFloat(cols[5], 64)
+		check(err)
 		p.txns = append(p.txns, t)
+
+		allKeys.AutoAssign(t.To)
 	}
 }
 
@@ -157,14 +158,22 @@ func (p *parser) generateClasses() {
 	p.classes = make([]bayesian.Class, 0, 10)
 	tomap := make(map[string]bool)
 	for _, t := range p.txns {
+		if t.skipClassification {
+			continue
+		}
 		tomap[t.To] = true
 	}
 	for to := range tomap {
 		p.classes = append(p.classes, bayesian.Class(to))
 	}
+	assert(len(p.classes) > 0)
 
 	p.cl = bayesian.NewClassifierTfIdf(p.classes...)
+	assert(p.cl != nil)
 	for _, t := range p.txns {
+		if _, has := tomap[t.To]; !has {
+			continue
+		}
 		desc := strings.ToLower(t.Desc)
 		p.cl.Learn(strings.Split(desc, " "), bayesian.Class(t.To))
 	}
@@ -265,16 +274,16 @@ func parseDescription(col string) (string, bool) {
 }
 
 func parseTransactionsFromCSV(in []byte) []txn {
-	r := csv.NewReader(bytes.NewReader(in))
-	// s := bufio.NewScanner(bytes.NewReader(in))
-	var t txn
 	ignored := make(map[int]bool)
 	for _, i := range strings.Split(*ignore, ",") {
 		pos, err := strconv.Atoi(i)
 		check(err)
 		ignored[pos] = true
 	}
+
 	result := make([]txn, 0, 100)
+	r := csv.NewReader(bytes.NewReader(in))
+	var t txn
 	for {
 		t = txn{Key: make([]byte, 16)}
 		// Have a unique key for each transaction in CSV, so we can unique identify and
@@ -321,29 +330,10 @@ func assignFor(opt string, cl bayesian.Class, keys map[rune]string) bool {
 }
 
 func setDefaultMappings(ks *keys.Shortcuts) {
-	ks.Assign('b', ".back")
-	ks.Assign('q', ".quit")
-	ks.Assign('a', ".show all")
-}
-
-func generateKeyMap(opts []bayesian.Class) map[rune]string {
-	keys := make(map[rune]string)
-	keys['b'] = ".back"
-	keys['q'] = ".quit"
-	keys['a'] = ".show all"
-	for _, opt := range opts {
-		if ok := assignFor(string(opt), opt, keys); ok {
-			continue
-		}
-		if ok := assignFor(strings.ToUpper(string(opt)), opt, keys); ok {
-			continue
-		}
-		if ok := assignFor("0123456789", opt, keys); ok {
-			continue
-		}
-		log.Fatalf("Unable to assign any key for: %v", opt)
-	}
-	return keys
+	ks.BestEffortAssign('b', ".back")
+	ks.BestEffortAssign('q', ".quit")
+	ks.BestEffortAssign('a', ".show all")
+	ks.BestEffortAssign('s', ".skip")
 }
 
 type kv struct {
@@ -469,6 +459,8 @@ func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) int {
 		switch opt {
 		case ".back":
 			return -1
+		case ".skip":
+			return 1
 		case ".quit":
 			return 9999
 		case ".show all":
