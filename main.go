@@ -275,10 +275,12 @@ func parseDescription(col string) (string, bool) {
 
 func parseTransactionsFromCSV(in []byte) []txn {
 	ignored := make(map[int]bool)
-	for _, i := range strings.Split(*ignore, ",") {
-		pos, err := strconv.Atoi(i)
-		check(err)
-		ignored[pos] = true
+	if len(*ignore) > 0 {
+		for _, i := range strings.Split(*ignore, ",") {
+			pos, err := strconv.Atoi(i)
+			check(err)
+			ignored[pos] = true
+		}
 	}
 
 	result := make([]txn, 0, 100)
