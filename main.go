@@ -57,15 +57,15 @@ var (
 )
 
 type accountConfig struct {
-	currency   string
-	journal    string
-	dateFormat string
-	ignore     string
-	output     string
+	Currency   string
+	Journal    string
+	DateFormat string
+	Ignore     string
+	Output     string
 }
 
 type configs struct {
-	all map[string]accountConfig // account and the corresponding config.
+	Accounts map[string]accountConfig // account and the corresponding config.
 }
 
 type txn struct {
@@ -107,8 +107,8 @@ type parser struct {
 	accounts map[string]string
 }
 
-func (p *parser) parseTransactions() {
-	out, err := exec.Command("ledger", "-f", *journal, "csv").Output()
+func (p *parser) parseTransactions(journal string) {
+	out, err := exec.Command("ledger", "-f", journal, "csv").Output()
 	check(err, "Unable to convert journal to csv.")
 	r := csv.NewReader(bytes.NewReader(out))
 	var t txn
@@ -329,7 +329,7 @@ func parseTransactionsFromCSV(in []byte) []txn {
 		if len(t.Desc) != 0 && !t.Date.IsZero() && t.Cur != 0.0 {
 			result = append(result, t)
 		} else {
-			log.Fatalf("Unable to parse txn for [%v]. Got: %+v\n", cols, t)
+			check(fmt.Errorf("Unable to parse txn for [%v]. Got: %+v\n", cols, t), "")
 		}
 	}
 	return result
@@ -636,7 +636,7 @@ func main() {
 	singleCharMode()
 	flag.Parse()
 
-	check(os.MkdirAll(*configDir, 0644), "Unable to create directory: %v", *configDir)
+	check(os.MkdirAll(*configDir, 0755), "Unable to create directory: %v", *configDir)
 	keyfile := path.Join(*configDir, "shortcuts.yaml")
 	short = keys.ParseConfig(keyfile)
 	setDefaultMappings(short)
@@ -648,42 +648,61 @@ func main() {
 	}
 
 	var config *accountConfig
-	configPath := path.Join(*configDir, "config.json")
+	configPath := path.Join(*configDir, "config.yaml")
 	data, err := ioutil.ReadFile(configPath)
 	if err == nil {
 		var c configs
 		check(yaml.Unmarshal(data, &c), "Unable to unmarshal yaml config at %v", configPath)
-		if ac, has := c.all[*account]; has {
+		if ac, has := c.Accounts[*account]; has {
 			fmt.Printf("Using config: %+v\n", ac)
 			config = &ac
+
+			// Allow overwrite of the config if flags are present.
+			if len(config.DateFormat) == 0 {
+				// We have a default value attached to dateFormat flag, so treat differently.
+				config.DateFormat = *dateFormat
+			}
+			if len(*journal) > 0 {
+				config.Journal = *journal
+			}
+			if len(*currency) > 0 {
+				config.Currency = *currency
+			}
+			if len(*ignore) > 0 {
+				config.Ignore = *ignore
+			}
+			if len(*output) > 0 {
+				config.Output = *output
+			}
 		}
 	}
 
 	if config == nil {
+		fmt.Printf("No config found in %s. Using all flags", configPath)
 		config = &accountConfig{
-			currency:   *currency,
-			journal:    *journal,
-			dateFormat: *dateFormat,
-			ignore:     *ignore,
-			output:     *output,
+			Currency:   *currency,
+			Journal:    *journal,
+			DateFormat: *dateFormat,
+			Ignore:     *ignore,
+			Output:     *output,
 		}
 	}
 
-	if len(config.journal) == 0 {
+	if len(config.Journal) == 0 {
 		oerr("Please specify the input ledger journal file")
 		return
 	}
-	data, err = ioutil.ReadFile(config.journal)
-	check(err, "Unable to read file: %v", config.journal)
-	alldata := includeAll(path.Dir(config.journal), data)
+	data, err = ioutil.ReadFile(config.Journal)
+	check(err, "Unable to read file: %v", config.Journal)
+	alldata := includeAll(path.Dir(config.Journal), data)
 
-	if len(config.output) == 0 {
+	if len(config.Output) == 0 {
 		oerr("Please specify the output file")
 		return
 	}
-	if _, err := os.Stat(config.output); os.IsNotExist(err) {
-		_, err := os.Create(config.output)
-		check(err, "Unable to check for output file: %v", config.output)
+	if _, err := os.Stat(config.Output); os.IsNotExist(err) {
+		_, err := os.Create(config.Output)
+		check(err, "Unable to check for output file: %v", config.Output)
 	}
 
 	tf, err := ioutil.TempFile("", "ledger-csv-txns")
@@ -700,12 +719,12 @@ func main() {
 		return nil
 	})
 
-	of, err := os.OpenFile(config.output, os.O_APPEND|os.O_WRONLY, 0600)
-	check(err, "Unable to open output file: %v", config.output)
+	of, err := os.OpenFile(config.Output, os.O_APPEND|os.O_WRONLY, 0600)
+	check(err, "Unable to open output file: %v", config.Output)
 
 	p := parser{data: alldata, db: db}
 	p.parseAccounts()
-	p.parseTransactions()
+	p.parseTransactions(config.Journal)
 
 	// Scanning done. Now train classifier.
 	p.generateClasses()
@@ -719,7 +738,7 @@ func main() {
 		} else {
 			txns[i].From = *account
 		}
-		txns[i].CurName = config.currency
+		txns[i].CurName = config.Currency
 	}
 
 	txns = p.removeDuplicates(txns)
