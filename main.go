@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	yaml "gopkg.in/yaml.v2"
+
 	"github.com/boltdb/bolt"
 	"github.com/fatih/color"
 	"github.com/jbrukh/bayesian"
@@ -38,8 +40,8 @@ var (
 	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
 	dateFormat = flag.String("d", "01/02/2006", "Defaults to MM/DD/YYYY. "+
 		"Express your date format w.r.t. Jan 02, 2006. See: https://golang.org/pkg/time/")
-	config = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
-		"Config file to store keyboard shortcuts in.")
+	configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
+		"Config directory to store various into-ledger configs in.")
 
 	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -51,19 +53,19 @@ var (
 	stamp      = "2006/01/02"
 	bucketName = []byte("txns")
 	descLength = 40
-	allKeys    *keys.Shortcuts
+	short      *keys.Shortcuts
 )
 
-func check(err error) {
-	if err != nil {
-		log.Fatalf("%+v", errors.WithStack(err))
-	}
+type accountConfig struct {
+	currency   string
+	journal    string
+	dateFormat string
+	ignore     string
+	output     string
 }
 
-func assert(ok bool) {
-	if !ok {
-		log.Fatalf("%+v", errors.Errorf("Should be true, but is false"))
-	}
+type configs struct {
+	all map[string]accountConfig // account and the corresponding config.
 }
 
 type txn struct {
@@ -83,6 +85,19 @@ func (b byTime) Len() int               { return len(b) }
 func (b byTime) Less(i int, j int) bool { return !b[i].Date.After(b[j].Date) }
 func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
 
+func check(err error, format string, args ...interface{}) {
+	if err != nil {
+		log.Printf(format, args)
+		log.Fatalf("%+v", errors.WithStack(err))
+	}
+}
+
+func assert(ok bool) {
+	if !ok {
+		log.Fatalf("%+v", errors.Errorf("Should be true, but is false"))
+	}
+}
+
 type parser struct {
 	db       *bolt.DB
 	data     []byte
@@ -94,7 +109,7 @@ type parser struct {
 
 func (p *parser) parseTransactions() {
 	out, err := exec.Command("ledger", "-f", *journal, "csv").Output()
-	check(err)
+	check(err, "Unable to convert journal to csv.")
 	r := csv.NewReader(bytes.NewReader(out))
 	var t txn
 	for {
@@ -102,11 +117,11 @@ func (p *parser) parseTransactions() {
 		if err == io.EOF {
 			break
 		}
-		check(err)
+		check(err, "Unable to read a csv line.")
 
 		t = txn{}
 		t.Date, err = time.Parse(stamp, cols[0])
-		check(err)
+		check(err, "Unable to parse time: %v", cols[0])
 		t.Desc = strings.Trim(cols[2], " \n\t")
 
 		t.To = cols[3]
@@ -125,10 +140,10 @@ func (p *parser) parseTransactions() {
 		}
 		t.CurName = cols[4]
 		t.Cur, err = strconv.ParseFloat(cols[5], 64)
-		check(err)
+		check(err, "Unable to parse amount.")
 		p.txns = append(p.txns, t)
 
-		allKeys.AutoAssign(t.To)
+		short.AutoAssign(t.To, "default")
 	}
 }
 
@@ -150,7 +165,7 @@ func (p *parser) parseAccounts() {
 	}
 
 	for _, alias := range p.accounts {
-		allKeys.AutoAssign(alias)
+		short.AutoAssign(alias, "default")
 	}
 }
 
@@ -245,7 +260,7 @@ func includeAll(dir string, data []byte) []byte {
 		}
 		fname := strings.Trim(line[8:], " \n")
 		include, err := ioutil.ReadFile(path.Join(dir, fname))
-		check(err)
+		check(err, "Unable to read file: %v", fname)
 		final = append(final, include...)
 	}
 	return final
@@ -278,7 +293,7 @@ func parseTransactionsFromCSV(in []byte) []txn {
 	if len(*ignore) > 0 {
 		for _, i := range strings.Split(*ignore, ",") {
 			pos, err := strconv.Atoi(i)
-			check(err)
+			check(err, "Unable to convert to integer: %v", i)
 			ignored[pos] = true
 		}
 	}
@@ -295,7 +310,7 @@ func parseTransactionsFromCSV(in []byte) []txn {
 		if err == io.EOF {
 			break
 		}
-		check(err)
+		check(err, "Unable to read line")
 
 		for i, col := range cols {
 			if ignored[i] {
@@ -332,10 +347,10 @@ func assignFor(opt string, cl bayesian.Class, keys map[rune]string) bool {
 }
 
 func setDefaultMappings(ks *keys.Shortcuts) {
-	ks.BestEffortAssign('b', ".back")
-	ks.BestEffortAssign('q', ".quit")
-	ks.BestEffortAssign('a', ".show all")
-	ks.BestEffortAssign('s', ".skip")
+	ks.BestEffortAssign('b', ".back", "default")
+	ks.BestEffortAssign('q', ".quit", "default")
+	ks.BestEffortAssign('a', ".show all", "default")
+	ks.BestEffortAssign('s', ".skip", "default")
 }
 
 type kv struct {
@@ -418,7 +433,7 @@ func (p *parser) writeToDB(t txn) {
 		b := tx.Bucket(bucketName)
 		var val bytes.Buffer
 		enc := gob.NewEncoder(&val)
-		check(enc.Encode(t))
+		check(enc.Encode(t), "Unable to encode txn: %v", t)
 		return b.Put(t.Key, val.Bytes())
 
 	}); err != nil {
@@ -447,7 +462,7 @@ func (p *parser) iterateDB() []txn {
 }
 
 func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) int {
-	ks.Print()
+	ks.Print("default", false)
 
 	r := make([]byte, 1)
 	os.Stdin.Read(r)
@@ -457,7 +472,7 @@ func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) int {
 		return 1
 	}
 
-	if opt, has := ks.MapsTo(ch); has {
+	if opt, has := ks.MapsTo(ch, "default"); has {
 		switch opt {
 		case ".back":
 			return -1
@@ -491,7 +506,7 @@ func (p *parser) printTxn(t *txn, idx, total int) int {
 	var ks keys.Shortcuts
 	setDefaultMappings(&ks)
 	for _, hit := range hits {
-		ks.AutoAssign(string(hit))
+		ks.AutoAssign(string(hit), "default")
 	}
 	res := p.printAndGetResult(ks, t)
 	if res != math.MaxInt16 {
@@ -500,7 +515,7 @@ func (p *parser) printTxn(t *txn, idx, total int) int {
 
 	clear()
 	printSummary(*t, idx, total)
-	res = p.printAndGetResult(*allKeys, t)
+	res = p.printAndGetResult(*short, t)
 	return res
 }
 
@@ -621,47 +636,72 @@ func main() {
 	singleCharMode()
 	flag.Parse()
 
-	allKeys = keys.ParseConfig(*config)
-	setDefaultMappings(allKeys)
-	defer allKeys.Persist()
+	check(os.MkdirAll(*configDir, 0644), "Unable to create directory: %v", *configDir)
+	keyfile := path.Join(*configDir, "shortcuts.yaml")
+	short = keys.ParseConfig(keyfile)
+	setDefaultMappings(short)
+	defer short.Persist(keyfile)
 
 	if len(*account) == 0 {
 		oerr("Please specify the account transactions are coming from")
 		return
 	}
-	if len(*journal) == 0 {
+
+	var config *accountConfig
+	configPath := path.Join(*configDir, "config.json")
+	data, err := ioutil.ReadFile(configPath)
+	if err == nil {
+		var c configs
+		check(yaml.Unmarshal(data, &c), "Unable to unmarshal yaml config at %v", configPath)
+		if ac, has := c.all[*account]; has {
+			fmt.Printf("Using config: %+v\n", ac)
+			config = &ac
+		}
+	}
+
+	if config == nil {
+		config = &accountConfig{
+			currency:   *currency,
+			journal:    *journal,
+			dateFormat: *dateFormat,
+			ignore:     *ignore,
+			output:     *output,
+		}
+	}
+
+	if len(config.journal) == 0 {
 		oerr("Please specify the input ledger journal file")
 		return
 	}
-	data, err := ioutil.ReadFile(*journal)
-	check(err)
-	alldata := includeAll(path.Dir(*journal), data)
+	data, err = ioutil.ReadFile(config.journal)
+	check(err, "Unable to read file: %v", config.journal)
+	alldata := includeAll(path.Dir(config.journal), data)
 
-	if len(*output) == 0 {
+	if len(config.output) == 0 {
 		oerr("Please specify the output file")
 		return
 	}
-	if _, err := os.Stat(*output); os.IsNotExist(err) {
-		_, err := os.Create(*output)
-		check(err)
+	if _, err := os.Stat(config.output); os.IsNotExist(err) {
+		_, err := os.Create(config.output)
+		check(err, "Unable to check for output file: %v", config.output)
 	}
 
 	tf, err := ioutil.TempFile("", "ledger-csv-txns")
-	check(err)
+	check(err, "Unable to create temp file")
 	defer os.Remove(tf.Name())
 
 	db, err := bolt.Open(tf.Name(), 0600, nil)
-	check(err)
+	check(err, "Unable to open boltdb at %v", tf.Name())
 	defer db.Close()
 
 	db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists(bucketName)
-		check(err)
+		check(err, "Unable to create default bucket in boltdb.")
 		return nil
 	})
 
-	of, err := os.OpenFile(*output, os.O_APPEND|os.O_WRONLY, 0600)
-	check(err)
+	of, err := os.OpenFile(config.output, os.O_APPEND|os.O_WRONLY, 0600)
+	check(err, "Unable to open output file: %v", config.output)
 
 	p := parser{data: alldata, db: db}
 	p.parseAccounts()
@@ -671,7 +711,7 @@ func main() {
 	p.generateClasses()
 
 	in, err := ioutil.ReadFile(*csvFile)
-	check(err)
+	check(err, "Unable to read csv file: %v", *csvFile)
 	txns := parseTransactionsFromCSV(in)
 	for i := range txns {
 		if txns[i].Cur > 0 {
@@ -679,7 +719,7 @@ func main() {
 		} else {
 			txns[i].From = *account
 		}
-		txns[i].CurName = *currency
+		txns[i].CurName = config.currency
 	}
 
 	txns = p.removeDuplicates(txns)
@@ -689,12 +729,12 @@ func main() {
 	sort.Sort(byTime(final))
 
 	_, err = of.WriteString(fmt.Sprintf("; into-ledger run at %v\n\n", time.Now()))
-	check(err)
+	check(err, "Unable to write into output file: %v", of.Name())
 
 	for _, t := range final {
 		if _, err := of.WriteString(ledgerFormat(t)); err != nil {
 			log.Fatalf("Unable to write to output: %v", err)
 		}
 	}
-	check(of.Close())
+	check(of.Close(), "Unable to close output file: %v", of.Name())
 }
