@@ -36,7 +36,7 @@ var (
 	debug      = flag.Bool("debug", false, "Additional debug information if set.")
 	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
 	account    = flag.String("a", "", "Name of bank account transactions belong to.")
-	currency   = flag.String("c", "$", "Set currency if any.")
+	currency   = flag.String("c", "", "Set currency if any.")
 	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
 	dateFormat = flag.String("d", "01/02/2006", "Defaults to MM/DD/YYYY. "+
 		"Express your date format w.r.t. Jan 02, 2006. See: https://golang.org/pkg/time/")
@@ -662,6 +662,9 @@ func main() {
 				// We have a default value attached to dateFormat flag, so treat differently.
 				config.DateFormat = *dateFormat
 			}
+			if len(config.Output) == 0 {
+				config.Output = *output
+			}
 			if len(*journal) > 0 {
 				config.Journal = *journal
 			}
@@ -670,9 +673,6 @@ func main() {
 			}
 			if len(*ignore) > 0 {
 				config.Ignore = *ignore
-			}
-			if len(*output) > 0 {
-				config.Output = *output
 			}
 		}
 	}
