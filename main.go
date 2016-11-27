@@ -31,17 +31,7 @@ import (
 )
 
 var (
-	journal    = flag.String("j", "", "Existing journal to learn from.")
-	output     = flag.String("o", "out.ldg", "Journal file to write to.")
-	debug      = flag.Bool("debug", false, "Additional debug information if set.")
-	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
-	account    = flag.String("a", "", "Name of bank account transactions belong to.")
-	currency   = flag.String("c", "", "Set currency if any.")
-	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
-	dateFormat = flag.String("d", "01/02/2006", "Defaults to MM/DD/YYYY. "+
-		"Express your date format w.r.t. Jan 02, 2006. See: https://golang.org/pkg/time/")
-	configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
-		"Config directory to store various into-ledger configs in.")
+	debug = flag.Bool("debug", false, "Additional debug information if set.")
 
 	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -54,6 +44,7 @@ var (
 	bucketName = []byte("txns")
 	descLength = 40
 	short      *keys.Shortcuts
+	config     *accountConfig
 )
 
 type accountConfig struct {
@@ -107,8 +98,8 @@ type parser struct {
 	accounts map[string]string
 }
 
-func (p *parser) parseTransactions(journal string) {
-	out, err := exec.Command("ledger", "-f", journal, "csv").Output()
+func (p *parser) parseTransactions() {
+	out, err := exec.Command("ledger", "-f", config.Journal, "csv").Output()
 	check(err, "Unable to convert journal to csv.")
 	r := csv.NewReader(bytes.NewReader(out))
 	var t txn
@@ -267,7 +258,7 @@ func includeAll(dir string, data []byte) []byte {
 }
 
 func parseDate(col string) (time.Time, bool) {
-	tm, err := time.Parse(*dateFormat, col)
+	tm, err := time.Parse(config.DateFormat, col)
 	if err == nil {
 		return tm, true
 	}
@@ -290,8 +281,8 @@ func parseDescription(col string) (string, bool) {
 
 func parseTransactionsFromCSV(in []byte) []txn {
 	ignored := make(map[int]bool)
-	if len(*ignore) > 0 {
-		for _, i := range strings.Split(*ignore, ",") {
+	if len(config.Ignore) > 0 {
+		for _, i := range strings.Split(config.Ignore, ",") {
 			pos, err := strconv.Atoi(i)
 			check(err, "Unable to convert to integer: %v", i)
 			ignored[pos] = true
@@ -633,6 +624,20 @@ func oerr(msg string) {
 }
 
 func main() {
+	var (
+		// Define all these flags here, so the rest of the code can't use them.
+		journal    = flag.String("j", "", "Existing journal to learn from.")
+		output     = flag.String("o", "out.ldg", "Journal file to write to.")
+		csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
+		account    = flag.String("a", "", "Name of bank account transactions belong to.")
+		currency   = flag.String("c", "", "Set currency if any.")
+		ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
+		dateFormat = flag.String("d", "01/02/2006", "Defaults to MM/DD/YYYY. "+
+			"Express your date format w.r.t. Jan 02, 2006. See: https://golang.org/pkg/time/")
+		configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
+			"Config directory to store various into-ledger configs in.")
+	)
+
 	singleCharMode()
 	flag.Parse()
 
@@ -647,7 +652,6 @@ func main() {
 		return
 	}
 
-	var config *accountConfig
 	configPath := path.Join(*configDir, "config.yaml")
 	data, err := ioutil.ReadFile(configPath)
 	if err == nil {
@@ -724,7 +728,7 @@ func main() {
 
 	p := parser{data: alldata, db: db}
 	p.parseAccounts()
-	p.parseTransactions(config.Journal)
+	p.parseTransactions()
 
 	// Scanning done. Now train classifier.
 	p.generateClasses()
