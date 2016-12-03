@@ -53,7 +53,7 @@ $ into-ledger -j ~/ledger/journal.ldg -csv ~/ledger/ACCT_464_25_07_2016.csv --ic
 $ into-ledger -j ~/ledger/journal.ldg -csv ~/ledger/Activity.CSV --ic "0,1" -o out.data -a chase -c USD
 ```
 
-Having to specify these command line arguments over and over again is annoying. So, instead you can create a config file in "$HOME/.into-ledger", like so:
+Having to specify these command line arguments over and over again is annoying. So, instead you can create a config file in "$HOME/.into-ledger/config.yaml", like so:
 
 ```
 accounts:
