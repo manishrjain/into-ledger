@@ -141,18 +141,22 @@ func (p *parser) parseTransactions() {
 func (p *parser) parseAccounts() {
 	p.accounts = make(map[string]string)
 	s := bufio.NewScanner(bytes.NewReader(p.data))
+	var acc string
 	for s.Scan() {
 		m := racc.FindStringSubmatch(s.Text())
+		if len(m) >= 2 {
+			acc = m[1]
+			continue
+		}
+		m = ralias.FindStringSubmatch(s.Text())
 		if len(m) < 2 {
 			continue
 		}
-		acc := m[1]
-
-		assert(s.Scan())
-		m = ralias.FindStringSubmatch(s.Text())
-		assert(len(m) > 1)
 		ali := m[1]
-		p.accounts[acc] = ali
+		if len(acc) > 0 && len(ali) > 0 {
+			p.accounts[acc] = ali
+			acc = ""
+		}
 	}
 
 	for _, alias := range p.accounts {
