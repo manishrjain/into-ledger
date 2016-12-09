@@ -79,12 +79,15 @@ func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
 func check(err error, format string, args ...interface{}) {
 	if err != nil {
 		log.Printf(format, args)
+		log.Println()
 		log.Fatalf("%+v", errors.WithStack(err))
 	}
 }
 
-func assert(ok bool) {
+func assert(ok bool, format string, args ...interface{}) {
 	if !ok {
+		log.Printf(format, args)
+		log.Println()
 		log.Fatalf("%+v", errors.Errorf("Should be true, but is false"))
 	}
 }
@@ -100,7 +103,7 @@ type parser struct {
 
 func (p *parser) parseTransactions() {
 	out, err := exec.Command("ledger", "-f", config.Journal, "csv").Output()
-	check(err, "Unable to convert journal to csv.")
+	check(err, "Unable to convert journal to csv. Possibly an issue with your ledger installation.")
 	r := csv.NewReader(bytes.NewReader(out))
 	var t txn
 	for {
@@ -116,7 +119,7 @@ func (p *parser) parseTransactions() {
 		t.Desc = strings.Trim(cols[2], " \n\t")
 
 		t.To = cols[3]
-		assert(len(t.To) > 0)
+		assert(len(t.To) > 0, "Expected TO, found empty.")
 		if strings.HasPrefix(t.To, "Assets:Reimbursements:") {
 			// pass
 		} else if strings.HasPrefix(t.To, "Assets:") {
@@ -134,7 +137,17 @@ func (p *parser) parseTransactions() {
 		check(err, "Unable to parse amount.")
 		p.txns = append(p.txns, t)
 
-		short.AutoAssign(t.To, "default")
+		tree := strings.Split(t.To, ":")
+		assert(len(tree) > 0, "Expected at least one result. Found none for: %v", t.To)
+		short.AutoAssign(tree[0], "default")
+		prev := tree[0]
+		for _, c := range tree[1:] {
+			if len(c) == 0 {
+				continue
+			}
+			short.AutoAssign(c, prev)
+			prev = c
+		}
 	}
 }
 
@@ -176,10 +189,10 @@ func (p *parser) generateClasses() {
 	for to := range tomap {
 		p.classes = append(p.classes, bayesian.Class(to))
 	}
-	assert(len(p.classes) > 0)
+	assert(len(p.classes) > 0, "Expected some categories. Found none.")
 
 	p.cl = bayesian.NewClassifierTfIdf(p.classes...)
-	assert(p.cl != nil)
+	assert(p.cl != nil, "Expected a valid classifier. Found nil.")
 	for _, t := range p.txns {
 		if _, has := tomap[t.To]; !has {
 			continue
@@ -457,8 +470,17 @@ func (p *parser) iterateDB() []txn {
 }
 
 func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) int {
-	ks.Print("default", false)
+	label := "default"
 
+	var category []string
+LOOP:
+	if len(category) > 0 {
+		fmt.Println()
+		color.New(color.BgWhite, color.FgBlack).Printf("Selected [%s]", strings.Join(category, ":")) // descLength used in Printf.
+		fmt.Println()
+	}
+
+	ks.Print(label, false)
 	r := make([]byte, 1)
 	os.Stdin.Read(r)
 	ch := rune(r[0])
@@ -467,7 +489,7 @@ func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) int {
 		return 1
 	}
 
-	if opt, has := ks.MapsTo(ch, "default"); has {
+	if opt, has := ks.MapsTo(ch, label); has {
 		switch opt {
 		case ".back":
 			return -1
@@ -478,10 +500,16 @@ func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) int {
 		case ".show all":
 			return math.MaxInt16
 		}
+
+		category = append(category, opt)
 		if t.Cur > 0 {
-			t.From = opt
+			t.From = strings.Join(category, ":")
 		} else {
-			t.To = opt
+			t.To = strings.Join(category, ":")
+		}
+		label = opt
+		if ks.HasLabel(label) {
+			goto LOOP
 		}
 	}
 	return 0
