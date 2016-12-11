@@ -43,6 +43,7 @@ var (
 	stamp      = "2006/01/02"
 	bucketName = []byte("txns")
 	descLength = 40
+	catLength  = 20
 	short      *keys.Shortcuts
 	config     *accountConfig
 )
@@ -92,13 +93,26 @@ func assert(ok bool, format string, args ...interface{}) {
 	}
 }
 
+func assignForAccount(account string) {
+	tree := strings.Split(account, ":")
+	assert(len(tree) > 0, "Expected at least one result. Found none for: %v", account)
+	short.AutoAssign(tree[0], "default")
+	prev := tree[0]
+	for _, c := range tree[1:] {
+		if len(c) == 0 {
+			continue
+		}
+		short.AutoAssign(c, prev)
+		prev = c
+	}
+}
+
 type parser struct {
-	db       *bolt.DB
-	data     []byte
-	txns     []txn
-	classes  []bayesian.Class
-	cl       *bayesian.Classifier
-	accounts map[string]string
+	db      *bolt.DB
+	data    []byte
+	txns    []txn
+	classes []bayesian.Class
+	cl      *bayesian.Classifier
 }
 
 func (p *parser) parseTransactions() {
@@ -129,30 +143,16 @@ func (p *parser) parseTransactions() {
 			// Don't pick up Equity.
 			t.skipClassification = true
 		}
-		if alias, has := p.accounts[t.To]; has {
-			t.To = alias
-		}
 		t.CurName = cols[4]
 		t.Cur, err = strconv.ParseFloat(cols[5], 64)
 		check(err, "Unable to parse amount.")
 		p.txns = append(p.txns, t)
 
-		tree := strings.Split(t.To, ":")
-		assert(len(tree) > 0, "Expected at least one result. Found none for: %v", t.To)
-		short.AutoAssign(tree[0], "default")
-		prev := tree[0]
-		for _, c := range tree[1:] {
-			if len(c) == 0 {
-				continue
-			}
-			short.AutoAssign(c, prev)
-			prev = c
-		}
+		assignForAccount(t.To)
 	}
 }
 
 func (p *parser) parseAccounts() {
-	p.accounts = make(map[string]string)
 	s := bufio.NewScanner(bytes.NewReader(p.data))
 	var acc string
 	for s.Scan() {
@@ -161,19 +161,9 @@ func (p *parser) parseAccounts() {
 			acc = m[1]
 			continue
 		}
-		m = ralias.FindStringSubmatch(s.Text())
-		if len(m) < 2 {
-			continue
+		if len(acc) > 0 {
+			assignForAccount(acc)
 		}
-		ali := m[1]
-		if len(acc) > 0 && len(ali) > 0 {
-			p.accounts[acc] = ali
-			acc = ""
-		}
-	}
-
-	for _, alias := range p.accounts {
-		short.AutoAssign(alias, "default")
 	}
 }
 
@@ -387,18 +377,23 @@ func singleCharMode() {
 	exec.Command("stty", "-F", "/dev/tty", "-echo").Run()
 }
 
-func printCategory(t txn) {
-	prefix := "[TO]"
-	cat := t.To
+func getCategory(t txn) (prefix, cat string) {
+	prefix = "[TO]"
+	cat = t.To
 	if t.Cur > 0 {
 		prefix = "[FROM]"
 		cat = t.From
 	}
+	return
+}
+
+func printCategory(t txn) {
+	prefix, cat := getCategory(t)
 	if len(cat) == 0 {
 		return
 	}
-	if len(cat) > 20 {
-		cat = cat[len(cat)-20:]
+	if len(cat) > catLength {
+		cat = cat[len(cat)-catLength:]
 	}
 	color.New(color.BgGreen, color.FgBlack).Printf(" %6s %-20s ", prefix, cat)
 }
@@ -472,6 +467,7 @@ func (p *parser) iterateDB() []txn {
 func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) int {
 	label := "default"
 
+	var repeat bool
 	var category []string
 LOOP:
 	if len(category) > 0 {
@@ -486,6 +482,9 @@ LOOP:
 	ch := rune(r[0])
 	if ch == rune(10) && len(t.To) > 0 && len(t.From) > 0 {
 		p.writeToDB(*t)
+		if repeat {
+			return 0
+		}
 		return 1
 	}
 
@@ -509,6 +508,7 @@ LOOP:
 		}
 		label = opt
 		if ks.HasLabel(label) {
+			repeat = true
 			goto LOOP
 		}
 	}
@@ -518,12 +518,19 @@ LOOP:
 func (p *parser) printTxn(t *txn, idx, total int) int {
 	clear()
 	printSummary(*t, idx, total)
+	fmt.Println()
 	if len(t.Desc) > descLength {
-		fmt.Println()
-		color.New(color.BgWhite, color.FgBlack).Printf("[DESC] %s ", t.Desc) // descLength used in Printf.
-		fmt.Println()
+		color.New(color.BgWhite, color.FgBlack).Printf("%6s %s ", "[DESC]", t.Desc) // descLength used in Printf.
 		fmt.Println()
 	}
+	{
+		prefix, cat := getCategory(*t)
+		if len(cat) > catLength {
+			color.New(color.BgGreen, color.FgBlack).Printf("%6s %s", prefix, cat)
+			fmt.Println()
+		}
+	}
+	fmt.Println()
 
 	hits := p.topHits(t.Desc)
 	var ks keys.Shortcuts
