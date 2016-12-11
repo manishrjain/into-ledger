@@ -54,6 +54,7 @@ type accountConfig struct {
 	DateFormat string
 	Ignore     string
 	Output     string
+	Skip       int
 }
 
 type configs struct {
@@ -299,6 +300,7 @@ func parseTransactionsFromCSV(in []byte) []txn {
 	result := make([]txn, 0, 100)
 	r := csv.NewReader(bytes.NewReader(in))
 	var t txn
+	var skipped int
 	for {
 		t = txn{Key: make([]byte, 16)}
 		// Have a unique key for each transaction in CSV, so we can unique identify and
@@ -309,6 +311,10 @@ func parseTransactionsFromCSV(in []byte) []txn {
 			break
 		}
 		check(err, "Unable to read line")
+		if config.Skip > skipped {
+			skipped++
+			continue
+		}
 
 		for i, col := range cols {
 			if ignored[i] {
@@ -673,6 +679,7 @@ func main() {
 		ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
 		dateFormat = flag.String("d", "01/02/2006", "Equivalent of month/date/year. "+
 			"Express your date format in numeric form w.r.t. Jan 02, 2006. See: https://golang.org/pkg/time/")
+		skip      = flag.Int("s", 0, "Number of header lines in CSV to skip")
 		configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
 			"Config directory to store various into-ledger configs in.")
 	)
@@ -716,6 +723,9 @@ func main() {
 			}
 			if len(*ignore) > 0 {
 				config.Ignore = *ignore
+			}
+			if *skip > 0 {
+				config.Skip = *skip
 			}
 		}
 	}
