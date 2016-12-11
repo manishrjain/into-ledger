@@ -677,8 +677,8 @@ func main() {
 		account    = flag.String("a", "", "Name of bank account transactions belong to.")
 		currency   = flag.String("c", "", "Set currency if any.")
 		ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
-		dateFormat = flag.String("d", "01/02/2006", "Equivalent of month/date/year. "+
-			"Express your date format in numeric form w.r.t. Jan 02, 2006. See: https://golang.org/pkg/time/")
+		dateFormat = flag.String("d", "01/02/2006",
+			"Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
 		skip      = flag.Int("s", 0, "Number of header lines in CSV to skip")
 		configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
 			"Config directory to store various into-ledger configs in.")

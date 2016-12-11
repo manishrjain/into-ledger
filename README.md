@@ -20,7 +20,7 @@ Install
 Help
 ----
 ```
-Usage of into-ledger:
+Usage of ./into-ledger:
   -a string
     	Name of bank account transactions belong to.
   -c string
@@ -30,7 +30,7 @@ Usage of into-ledger:
   -csv string
     	File path of CSV file containing new transactions.
   -d string
-    	Defaults to MM/DD/YYYY. Express your date format w.r.t. Jan 02, 2006. See: https://golang.org/pkg/time/ (default "01/02/2006")
+    	Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/ (default "01/02/2006")
   -debug
     	Additional debug information if set.
   -ic string
@@ -39,8 +39,9 @@ Usage of into-ledger:
     	Existing journal to learn from.
   -o string
     	Journal file to write to. (default "out.ldg")
+  -s int
+    	Number of header lines in CSV to skip
 ```
-
 
 Usage
 -----
@@ -49,8 +50,8 @@ Usage
 # Importing from Citibank Australia
 $ into-ledger -j ~/ledger/journal.ldg -csv ~/ledger/ACCT_464_25_07_2016.csv --ic "3,4" -o out.data -a citi -c AUD -d "02/01/2006"
 
-# Importing from Chase USA
-$ into-ledger -j ~/ledger/journal.ldg -csv ~/ledger/Activity.CSV --ic "0,1" -o out.data -a chase -c USD
+# Importing from Chase USA. Skips the first line in CSV file. Also skips the first (0) and second (1) column in csv. Outputs to out.data. Sets currency as USD.
+$ into-ledger -j ~/ledger/journal.ldg -csv ~/ledger/Activity.CSV --ic "0,1" -o out.data -a chase -c USD -s 1
 ```
 
 Having to specify these command line arguments over and over again is annoying. So, instead you can create a config file in "$HOME/.into-ledger/config.yaml", like so:
@@ -63,6 +64,7 @@ accounts:
     dateformat: 01/02/2006
     ignore: "0,1"
     output: /home/mrjn/ledger/chase.out
+    skip: 1
   cba-smart:
     currency: AUD
     journal: /home/mrjn/ledger/journal.ldg
