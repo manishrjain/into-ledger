@@ -383,6 +383,10 @@ func singleCharMode() {
 	exec.Command("stty", "-F", "/dev/tty", "-echo").Run()
 }
 
+func saneMode() {
+	exec.Command("stty", "-F", "/dev/tty", "sane").Run()
+}
+
 func getCategory(t txn) (prefix, cat string) {
 	prefix = "[TO]"
 	cat = t.To
@@ -669,6 +673,8 @@ func oerr(msg string) {
 }
 
 func main() {
+	defer saneMode()
+
 	var (
 		// Define all these flags here, so the rest of the code can't use them.
 		journal    = flag.String("j", "", "Existing journal to learn from.")
@@ -684,8 +690,8 @@ func main() {
 			"Config directory to store various into-ledger configs in.")
 	)
 
-	singleCharMode()
 	flag.Parse()
+	singleCharMode()
 
 	check(os.MkdirAll(*configDir, 0755), "Unable to create directory: %v", *configDir)
 	keyfile := path.Join(*configDir, "shortcuts.yaml")
