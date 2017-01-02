@@ -79,7 +79,7 @@ Now you can just run:
 Dates
 -----
 
-into-ledger requires you to specify the date format in numeric form w.r.t. Jan 02, 2006. This is how Go language parses dates. This is frequently a cause of confusion among folks unfamiliar with the language. So, please find here the common date formats and how to specify them in into-ledger.
+into-ledger requires you to specify the date format in numeric form w.r.t. Jan 02, 2006. This is how Go language parses dates. This is frequently a cause of confusion among folks unfamiliar with the language. So, please find here the commonly used date formats and how to specify them in into-ledger.
 
 | Formatting Style | Regions used in | into-ledger format |
 | ---------------- | --------------- | ------------------ |
