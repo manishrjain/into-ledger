@@ -666,9 +666,10 @@ func (p *parser) removeDuplicates(txns []txn) []txn {
 var errc = color.New(color.BgRed, color.FgWhite).PrintfFunc()
 
 func oerr(msg string) {
-	flag.PrintDefaults()
-	fmt.Println()
 	errc("\tERROR: " + msg + " ")
+	fmt.Println()
+	fmt.Println("Flags available:")
+	flag.PrintDefaults()
 	fmt.Println()
 }
 
@@ -737,7 +738,9 @@ func main() {
 	}
 
 	if config == nil {
-		fmt.Printf("No config found in %s. Using all flags\n", configPath)
+		errc(fmt.Sprintf("No config entry found in %q for account %q. Using only provided flags.", configPath, *account))
+		fmt.Println()
+		fmt.Println()
 		config = &accountConfig{
 			Currency:   *currency,
 			Journal:    *journal,

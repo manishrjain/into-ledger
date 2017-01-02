@@ -76,6 +76,21 @@ accounts:
 Now you can just run:
 `into-ledger -a chase -csv <input-csv>`, or `into-ledger -a cba-smart -csv <input-csv>`
 
+Dates
+-----
+
+into-ledger requires you to specify the date format in numeric form w.r.t. Jan 02, 2006. This is how Go language parses dates. This is frequently a cause of confusion among folks unfamiliar with the language. So, please find here the common date formats and how to specify them in into-ledger.
+
+| Formatting Style | Regions used in | into-ledger format |
+| ---------------- | --------------- | ------------------ |
+| Month/Date/Year | USA | 01/02/2006 |
+| Month-Date-Year | USA | 01-02-2006 |
+| Date/Month/Year | Australia, others | 02/01/2006 |
+| Date-Month-Year | Australia, others | 02-01-2006 |
+| Year/Month/Date | Ledger | 2006/01/02 |
+| Year-Month-Date | Ledger | 2006-01-02 |
+
+
 Keyboard Shortcuts
 ------------------
 
