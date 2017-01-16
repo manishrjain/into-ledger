@@ -311,7 +311,7 @@ func parseTransactionsFromCSV(in []byte) []txn {
 		if err == io.EOF {
 			break
 		}
-		check(err, "Unable to read line")
+		check(err, "Unable to read line: %v", cols)
 		if config.Skip > skipped {
 			skipped++
 			continue
