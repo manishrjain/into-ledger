@@ -70,6 +70,7 @@ type txn struct {
 	CurName            string
 	Key                []byte
 	skipClassification bool
+	Done               bool
 }
 
 type byTime []txn
@@ -409,6 +410,12 @@ func printCategory(t txn) {
 }
 
 func printSummary(t txn, idx, total int) {
+	if t.Done {
+		color.New(color.BgGreen, color.FgBlack).Printf(" R ")
+	} else {
+		color.New(color.BgRed, color.FgWhite).Printf(" N ")
+	}
+
 	if total > 999 {
 		color.New(color.BgBlue, color.FgWhite).Printf(" [%4d of %4d] ", idx, total)
 	} else if total > 99 {
@@ -492,6 +499,7 @@ LOOP:
 	ch := rune(r[0])
 	if ch == rune(10) && len(t.To) > 0 && len(t.From) > 0 {
 		p.writeToDB(*t)
+		t.Done = true
 		if repeat {
 			return 0
 		}
@@ -559,15 +567,19 @@ func (p *parser) printTxn(t *txn, idx, total int) int {
 	return res
 }
 
-func (p *parser) showAndCategorizeTxns(txns []txn) {
+func (p *parser) showAndCategorizeTxns(rtxns []txn) {
+	txns := rtxns
 	for {
-		for i := range txns {
+		for i := 0; i < len(txns); i++ {
+			// for i := range txns {
 			t := &txns[i]
-			hits := p.topHits(t.Desc)
-			if t.Cur < 0 {
-				t.To = string(hits[0])
-			} else {
-				t.From = string(hits[0])
+			if !t.Done {
+				hits := p.topHits(t.Desc)
+				if t.Cur < 0 {
+					t.To = string(hits[0])
+				} else {
+					t.From = string(hits[0])
+				}
 			}
 			printSummary(*t, i, len(txns))
 		}
@@ -581,7 +593,8 @@ func (p *parser) showAndCategorizeTxns(txns []txn) {
 		}
 
 		for i := 0; i < len(txns) && i >= 0; {
-			i += p.printTxn(&txns[i], i, len(txns))
+			t := &txns[i]
+			i += p.printTxn(t, i, len(txns))
 		}
 	}
 }
