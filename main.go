@@ -79,7 +79,7 @@ func (b byTime) Len() int               { return len(b) }
 func (b byTime) Less(i int, j int) bool { return !b[i].Date.After(b[j].Date) }
 func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
 
-func check(err error, format string, args ...interface{}) {
+func checkf(err error, format string, args ...interface{}) {
 	if err != nil {
 		log.Printf(format, args)
 		log.Println()
@@ -87,7 +87,7 @@ func check(err error, format string, args ...interface{}) {
 	}
 }
 
-func assert(ok bool, format string, args ...interface{}) {
+func assertf(ok bool, format string, args ...interface{}) {
 	if !ok {
 		log.Printf(format, args)
 		log.Println()
@@ -97,7 +97,7 @@ func assert(ok bool, format string, args ...interface{}) {
 
 func assignForAccount(account string) {
 	tree := strings.Split(account, ":")
-	assert(len(tree) > 0, "Expected at least one result. Found none for: %v", account)
+	assertf(len(tree) > 0, "Expected at least one result. Found none for: %v", account)
 	short.AutoAssign(tree[0], "default")
 	prev := tree[0]
 	for _, c := range tree[1:] {
@@ -119,7 +119,7 @@ type parser struct {
 
 func (p *parser) parseTransactions() {
 	out, err := exec.Command("ledger", "-f", config.Journal, "csv").Output()
-	check(err, "Unable to convert journal to csv. Possibly an issue with your ledger installation.")
+	checkf(err, "Unable to convert journal to csv. Possibly an issue with your ledger installation.")
 	r := csv.NewReader(bytes.NewReader(out))
 	var t txn
 	for {
@@ -127,15 +127,15 @@ func (p *parser) parseTransactions() {
 		if err == io.EOF {
 			break
 		}
-		check(err, "Unable to read a csv line.")
+		checkf(err, "Unable to read a csv line.")
 
 		t = txn{}
 		t.Date, err = time.Parse(stamp, cols[0])
-		check(err, "Unable to parse time: %v", cols[0])
+		checkf(err, "Unable to parse time: %v", cols[0])
 		t.Desc = strings.Trim(cols[2], " \n\t")
 
 		t.To = cols[3]
-		assert(len(t.To) > 0, "Expected TO, found empty.")
+		assertf(len(t.To) > 0, "Expected TO, found empty.")
 		if strings.HasPrefix(t.To, "Assets:Reimbursements:") {
 			// pass
 		} else if strings.HasPrefix(t.To, "Assets:") {
@@ -147,7 +147,7 @@ func (p *parser) parseTransactions() {
 		}
 		t.CurName = cols[4]
 		t.Cur, err = strconv.ParseFloat(cols[5], 64)
-		check(err, "Unable to parse amount.")
+		checkf(err, "Unable to parse amount.")
 		p.txns = append(p.txns, t)
 
 		assignForAccount(t.To)
@@ -181,10 +181,10 @@ func (p *parser) generateClasses() {
 	for to := range tomap {
 		p.classes = append(p.classes, bayesian.Class(to))
 	}
-	assert(len(p.classes) > 0, "Expected some categories. Found none.")
+	assertf(len(p.classes) > 0, "Expected some categories. Found none.")
 
 	p.cl = bayesian.NewClassifierTfIdf(p.classes...)
-	assert(p.cl != nil, "Expected a valid classifier. Found nil.")
+	assertf(p.cl != nil, "Expected a valid classifier. Found nil.")
 	for _, t := range p.txns {
 		if _, has := tomap[t.To]; !has {
 			continue
@@ -260,7 +260,7 @@ func includeAll(dir string, data []byte) []byte {
 		}
 		fname := strings.Trim(line[8:], " \n")
 		include, err := ioutil.ReadFile(path.Join(dir, fname))
-		check(err, "Unable to read file: %v", fname)
+		checkf(err, "Unable to read file: %v", fname)
 		final = append(final, include...)
 	}
 	return final
@@ -293,7 +293,7 @@ func parseTransactionsFromCSV(in []byte) []txn {
 	if len(config.Ignore) > 0 {
 		for _, i := range strings.Split(config.Ignore, ",") {
 			pos, err := strconv.Atoi(i)
-			check(err, "Unable to convert to integer: %v", i)
+			checkf(err, "Unable to convert to integer: %v", i)
 			ignored[pos] = true
 		}
 	}
@@ -311,16 +311,18 @@ func parseTransactionsFromCSV(in []byte) []txn {
 		if err == io.EOF {
 			break
 		}
-		check(err, "Unable to read line: %v", cols)
+		checkf(err, "Unable to read line: %v", strings.Join(cols, ", "))
 		if config.Skip > skipped {
 			skipped++
 			continue
 		}
 
+		var picked []string
 		for i, col := range cols {
 			if ignored[i] {
 				continue
 			}
+			picked = append(picked, col)
 			if date, ok := parseDate(col); ok {
 				t.Date = date
 
@@ -331,10 +333,17 @@ func parseTransactionsFromCSV(in []byte) []txn {
 				t.Desc = d
 			}
 		}
+
 		if len(t.Desc) != 0 && !t.Date.IsZero() && t.Cur != 0.0 {
 			result = append(result, t)
 		} else {
-			check(fmt.Errorf("Unable to parse txn for %v\n. Got: %+v\n", cols, t), "")
+			fmt.Println()
+			fmt.Printf("ERROR           : Unable to parse transaction from the selected columns in CSV.\n")
+			fmt.Printf("Selected CSV    : %v\n", strings.Join(picked, ", "))
+			fmt.Printf("Parsed Date     : %v\n", t.Date)
+			fmt.Printf("Parsed Desc     : %v\n", t.Desc)
+			fmt.Printf("Parsed Currency : %v\n", t.Cur)
+			log.Fatalln("Please ensure that the above CSV contains ALL the 3 required fields.")
 		}
 	}
 	return result
@@ -453,7 +462,7 @@ func (p *parser) writeToDB(t txn) {
 		b := tx.Bucket(bucketName)
 		var val bytes.Buffer
 		enc := gob.NewEncoder(&val)
-		check(enc.Encode(t), "Unable to encode txn: %v", t)
+		checkf(enc.Encode(t), "Unable to encode txn: %v", t)
 		return b.Put(t.Key, val.Bytes())
 
 	}); err != nil {
@@ -707,7 +716,7 @@ func main() {
 	flag.Parse()
 	singleCharMode()
 
-	check(os.MkdirAll(*configDir, 0755), "Unable to create directory: %v", *configDir)
+	checkf(os.MkdirAll(*configDir, 0755), "Unable to create directory: %v", *configDir)
 	keyfile := path.Join(*configDir, "shortcuts.yaml")
 	short = keys.ParseConfig(keyfile)
 	setDefaultMappings(short)
@@ -722,7 +731,7 @@ func main() {
 	data, err := ioutil.ReadFile(configPath)
 	if err == nil {
 		var c configs
-		check(yaml.Unmarshal(data, &c), "Unable to unmarshal yaml config at %v", configPath)
+		checkf(yaml.Unmarshal(data, &c), "Unable to unmarshal yaml config at %v", configPath)
 		if ac, has := c.Accounts[*account]; has {
 			fmt.Printf("Using config: %+v\n", ac)
 			config = &ac
@@ -768,7 +777,7 @@ func main() {
 		return
 	}
 	data, err = ioutil.ReadFile(config.Journal)
-	check(err, "Unable to read file: %v", config.Journal)
+	checkf(err, "Unable to read file: %v", config.Journal)
 	alldata := includeAll(path.Dir(config.Journal), data)
 
 	if len(config.Output) == 0 {
@@ -777,25 +786,25 @@ func main() {
 	}
 	if _, err := os.Stat(config.Output); os.IsNotExist(err) {
 		_, err := os.Create(config.Output)
-		check(err, "Unable to check for output file: %v", config.Output)
+		checkf(err, "Unable to check for output file: %v", config.Output)
 	}
 
 	tf, err := ioutil.TempFile("", "ledger-csv-txns")
-	check(err, "Unable to create temp file")
+	checkf(err, "Unable to create temp file")
 	defer os.Remove(tf.Name())
 
 	db, err := bolt.Open(tf.Name(), 0600, nil)
-	check(err, "Unable to open boltdb at %v", tf.Name())
+	checkf(err, "Unable to open boltdb at %v", tf.Name())
 	defer db.Close()
 
 	db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists(bucketName)
-		check(err, "Unable to create default bucket in boltdb.")
+		checkf(err, "Unable to create default bucket in boltdb.")
 		return nil
 	})
 
 	of, err := os.OpenFile(config.Output, os.O_APPEND|os.O_WRONLY, 0600)
-	check(err, "Unable to open output file: %v", config.Output)
+	checkf(err, "Unable to open output file: %v", config.Output)
 
 	p := parser{data: alldata, db: db}
 	p.parseAccounts()
@@ -805,7 +814,7 @@ func main() {
 	p.generateClasses()
 
 	in, err := ioutil.ReadFile(*csvFile)
-	check(err, "Unable to read csv file: %v", *csvFile)
+	checkf(err, "Unable to read csv file: %v", *csvFile)
 	txns := parseTransactionsFromCSV(in)
 	for i := range txns {
 		if txns[i].Cur > 0 {
@@ -823,12 +832,12 @@ func main() {
 	sort.Sort(byTime(final))
 
 	_, err = of.WriteString(fmt.Sprintf("; into-ledger run at %v\n\n", time.Now()))
-	check(err, "Unable to write into output file: %v", of.Name())
+	checkf(err, "Unable to write into output file: %v", of.Name())
 
 	for _, t := range final {
 		if _, err := of.WriteString(ledgerFormat(t)); err != nil {
 			log.Fatalf("Unable to write to output: %v", err)
 		}
 	}
-	check(of.Close(), "Unable to close output file: %v", of.Name())
+	checkf(of.Close(), "Unable to close output file: %v", of.Name())
 }
