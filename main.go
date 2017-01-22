@@ -31,7 +31,19 @@ import (
 )
 
 var (
-	debug = flag.Bool("debug", false, "Additional debug information if set.")
+	debug      = flag.Bool("debug", false, "Additional debug information if set.")
+	journal    = flag.String("j", "", "Existing journal to learn from.")
+	output     = flag.String("o", "out.ldg", "Journal file to write to.")
+	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
+	account    = flag.String("a", "", "Name of bank account transactions belong to.")
+	currency   = flag.String("c", "", "Set currency if any.")
+	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
+	dateFormat = flag.String("d", "01/02/2006",
+		"Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
+	skip      = flag.Int("s", 0, "Number of header lines in CSV to skip")
+	configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
+		"Config directory to store various into-ledger configs in.")
+	shortcuts = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
 
 	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -45,20 +57,14 @@ var (
 	descLength = 40
 	catLength  = 20
 	short      *keys.Shortcuts
-	config     *accountConfig
 )
 
-type accountConfig struct {
-	Currency   string
-	Journal    string
-	DateFormat string
-	Ignore     string
-	Output     string
-	Skip       int
+type accountFlags struct {
+	flags map[string]string
 }
 
 type configs struct {
-	Accounts map[string]accountConfig // account and the corresponding config.
+	Accounts map[string]map[string]string // account and the corresponding config.
 }
 
 type txn struct {
@@ -119,7 +125,7 @@ type parser struct {
 }
 
 func (p *parser) parseTransactions() {
-	out, err := exec.Command("ledger", "-f", config.Journal, "csv").Output()
+	out, err := exec.Command("ledger", "-f", *journal, "csv").Output()
 	checkf(err, "Unable to convert journal to csv. Possibly an issue with your ledger installation.")
 	r := csv.NewReader(bytes.NewReader(out))
 	var t txn
@@ -273,7 +279,7 @@ func includeAll(dir string, data []byte) []byte {
 }
 
 func parseDate(col string) (time.Time, bool) {
-	tm, err := time.Parse(config.DateFormat, col)
+	tm, err := time.Parse(*dateFormat, col)
 	if err == nil {
 		return tm, true
 	}
@@ -296,8 +302,8 @@ func parseDescription(col string) (string, bool) {
 
 func parseTransactionsFromCSV(in []byte) []txn {
 	ignored := make(map[int]bool)
-	if len(config.Ignore) > 0 {
-		for _, i := range strings.Split(config.Ignore, ",") {
+	if len(*ignore) > 0 {
+		for _, i := range strings.Split(*ignore, ",") {
 			pos, err := strconv.Atoi(i)
 			checkf(err, "Unable to convert to integer: %v", i)
 			ignored[pos] = true
@@ -318,7 +324,7 @@ func parseTransactionsFromCSV(in []byte) []txn {
 			break
 		}
 		checkf(err, "Unable to read line: %v", strings.Join(cols, ", "))
-		if config.Skip > skipped {
+		if *skip > skipped {
 			skipped++
 			continue
 		}
@@ -702,32 +708,12 @@ func oerr(msg string) {
 }
 
 func main() {
-	defer saneMode()
-
-	var (
-		// Define all these flags here, so the rest of the code can't use them.
-		journal    = flag.String("j", "", "Existing journal to learn from.")
-		output     = flag.String("o", "out.ldg", "Journal file to write to.")
-		csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
-		account    = flag.String("a", "", "Name of bank account transactions belong to.")
-		currency   = flag.String("c", "", "Set currency if any.")
-		ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
-		dateFormat = flag.String("d", "01/02/2006",
-			"Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
-		skip      = flag.Int("s", 0, "Number of header lines in CSV to skip")
-		configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
-			"Config directory to store various into-ledger configs in.")
-	)
-
 	flag.Parse()
+
+	defer saneMode()
 	singleCharMode()
 
 	checkf(os.MkdirAll(*configDir, 0755), "Unable to create directory: %v", *configDir)
-	keyfile := path.Join(*configDir, "shortcuts.yaml")
-	short = keys.ParseConfig(keyfile)
-	setDefaultMappings(short)
-	defer short.Persist(keyfile)
-
 	if len(*account) == 0 {
 		oerr("Please specify the account transactions are coming from")
 		return
@@ -739,60 +725,32 @@ func main() {
 		var c configs
 		checkf(yaml.Unmarshal(data, &c), "Unable to unmarshal yaml config at %v", configPath)
 		if ac, has := c.Accounts[*account]; has {
-			fmt.Printf("Using config: %+v\n", ac)
-			config = &ac
-
-			// Allow overwrite of the config if flags are present.
-			if len(config.DateFormat) == 0 {
-				// We have a default value attached to dateFormat flag, so treat differently.
-				config.DateFormat = *dateFormat
-			}
-			if len(config.Output) == 0 {
-				config.Output = *output
-			}
-			if len(*journal) > 0 {
-				config.Journal = *journal
-			}
-			if len(*currency) > 0 {
-				config.Currency = *currency
-			}
-			if len(*ignore) > 0 {
-				config.Ignore = *ignore
-			}
-			if *skip > 0 {
-				config.Skip = *skip
+			fmt.Printf("Using flags from config: %+v\n", ac)
+			for k, v := range ac {
+				flag.Set(k, v)
 			}
 		}
 	}
+	keyfile := path.Join(*configDir, *shortcuts)
+	short = keys.ParseConfig(keyfile)
+	setDefaultMappings(short)
+	defer short.Persist(keyfile)
 
-	if config == nil {
-		errc(fmt.Sprintf("No config entry found in %q for account %q. Using only provided flags.", configPath, *account))
-		fmt.Println()
-		fmt.Println()
-		config = &accountConfig{
-			Currency:   *currency,
-			Journal:    *journal,
-			DateFormat: *dateFormat,
-			Ignore:     *ignore,
-			Output:     *output,
-		}
-	}
-
-	if len(config.Journal) == 0 {
+	if len(*journal) == 0 {
 		oerr("Please specify the input ledger journal file")
 		return
 	}
-	data, err = ioutil.ReadFile(config.Journal)
-	checkf(err, "Unable to read file: %v", config.Journal)
-	alldata := includeAll(path.Dir(config.Journal), data)
+	data, err = ioutil.ReadFile(*journal)
+	checkf(err, "Unable to read file: %v", *journal)
+	alldata := includeAll(path.Dir(*journal), data)
 
-	if len(config.Output) == 0 {
+	if len(*output) == 0 {
 		oerr("Please specify the output file")
 		return
 	}
-	if _, err := os.Stat(config.Output); os.IsNotExist(err) {
-		_, err := os.Create(config.Output)
-		checkf(err, "Unable to check for output file: %v", config.Output)
+	if _, err := os.Stat(*output); os.IsNotExist(err) {
+		_, err := os.Create(*output)
+		checkf(err, "Unable to check for output file: %v", *output)
 	}
 
 	tf, err := ioutil.TempFile("", "ledger-csv-txns")
@@ -809,8 +767,8 @@ func main() {
 		return nil
 	})
 
-	of, err := os.OpenFile(config.Output, os.O_APPEND|os.O_WRONLY, 0600)
-	checkf(err, "Unable to open output file: %v", config.Output)
+	of, err := os.OpenFile(*output, os.O_APPEND|os.O_WRONLY, 0600)
+	checkf(err, "Unable to open output file: %v", *output)
 
 	p := parser{data: alldata, db: db}
 	p.parseAccounts()
@@ -828,7 +786,7 @@ func main() {
 		} else {
 			txns[i].From = *account
 		}
-		txns[i].CurName = config.Currency
+		txns[i].CurName = *currency
 	}
 
 	txns = p.removeDuplicates(txns)
