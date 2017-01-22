@@ -54,24 +54,26 @@ $ into-ledger -j ~/ledger/journal.ldg -csv ~/ledger/ACCT_464_25_07_2016.csv --ic
 $ into-ledger -j ~/ledger/journal.ldg -csv ~/ledger/Activity.CSV --ic "0,1" -o out.data -a chase -c USD -s 1
 ```
 
-Having to specify these command line arguments over and over again is annoying. So, instead you can create a config file in "$HOME/.into-ledger/config.yaml", like so:
+Having to specify these command line arguments over and over again is annoying. So, instead you can create a config file in "$HOME/.into-ledger/config.yaml", storing the flag values for reuse, like so:
 
 ```
 accounts:
   chase:
-    currency: USD
-    journal: /home/mrjn/ledger/journal.ldg
-    dateformat: 01/02/2006
-    ignore: "0,1"
-    output: /home/mrjn/ledger/chase.out
-    skip: 1
+    c: USD
+    j: /home/mrjn/ledger/journal.ldg
+    d: 01/02/2006
+    ic: "0,1"
+    o: /home/mrjn/ledger/chase.out
+    s: 1
   cba-smart:
-    currency: AUD
-    journal: /home/mrjn/ledger/journal.ldg
-    dateformat: 02/01/2006
-    ignore: "3"
-    output: /home/mrjn/ledger/cba.out
+    c: AUD
+    j: /home/mrjn/ledger/journal.ldg
+    d: 02/01/2006
+    ic: "3"
+    o: /home/mrjn/ledger/cba.out
 ```
+
+**Note: The way config is stored has changed recently. Please update your version of into-ledger using `go get -u -v github.com/manishrjain/into-ledger`. Also, update your config file.**
 
 Now you can just run:
 `into-ledger -a chase -csv <input-csv>`, or `into-ledger -a cba-smart -csv <input-csv>`
