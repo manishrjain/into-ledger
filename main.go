@@ -110,11 +110,12 @@ func assignForAccount(account string) {
 }
 
 type parser struct {
-	db      *bolt.DB
-	data    []byte
-	txns    []txn
-	classes []bayesian.Class
-	cl      *bayesian.Classifier
+	db       *bolt.DB
+	data     []byte
+	txns     []txn
+	classes  []bayesian.Class
+	cl       *bayesian.Classifier
+	accounts []string
 }
 
 func (p *parser) parseTransactions() {
@@ -159,13 +160,15 @@ func (p *parser) parseAccounts() {
 	var acc string
 	for s.Scan() {
 		m := racc.FindStringSubmatch(s.Text())
-		if len(m) >= 2 {
-			acc = m[1]
+		if len(m) < 2 {
 			continue
 		}
-		if len(acc) > 0 {
-			assignForAccount(acc)
+		acc = m[1]
+		if len(acc) == 0 {
+			continue
 		}
+		p.accounts = append(p.accounts, acc)
+		assignForAccount(acc)
 	}
 }
 
@@ -178,10 +181,13 @@ func (p *parser) generateClasses() {
 		}
 		tomap[t.To] = true
 	}
+	for _, a := range p.accounts {
+		tomap[a] = true
+	}
 	for to := range tomap {
 		p.classes = append(p.classes, bayesian.Class(to))
 	}
-	assertf(len(p.classes) > 0, "Expected some categories. Found none.")
+	assertf(len(p.classes) > 1, "Expected some categories. Found none.")
 
 	p.cl = bayesian.NewClassifierTfIdf(p.classes...)
 	assertf(p.cl != nil, "Expected a valid classifier. Found nil.")
