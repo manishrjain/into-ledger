@@ -127,7 +127,7 @@ type parser struct {
 func (p *parser) parseTransactions() {
 	out, err := exec.Command("ledger", "-f", *journal, "csv").Output()
 	checkf(err, "Unable to convert journal to csv. Possibly an issue with your ledger installation.")
-	r := csv.NewReader(bytes.NewReader(out))
+	r := csv.NewReader(newConverter(bytes.NewReader(out)))
 	var t txn
 	for {
 		cols, err := r.Read()
