@@ -85,12 +85,12 @@ into-ledger requires you to specify the date format in numeric form w.r.t. Jan 0
 
 | Formatting Style | Regions used in | into-ledger format |
 | ---------------- | --------------- | ------------------ |
-| Month/Date/Year | USA | 01/02/2006 |
-| Month-Date-Year | USA | 01-02-2006 |
-| Date/Month/Year | Australia, others | 02/01/2006 |
-| Date-Month-Year | Australia, others | 02-01-2006 |
-| Year/Month/Date | Ledger | 2006/01/02 |
-| Year-Month-Date | Ledger | 2006-01-02 |
+| Month/Day/Year | USA | 01/02/2006 |
+| Month-Day-Year | USA | 01-02-2006 |
+| Day/Month/Year | Australia, others | 02/01/2006 |
+| Day-Month-Year | Australia, others | 02-01-2006 |
+| Year/Month/Day | Ledger | 2006/01/02 |
+| Year-Month-Day | Ledger | 2006-01-02 |
 
 
 Keyboard Shortcuts
