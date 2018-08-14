@@ -3,7 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/csv"
 	"encoding/gob"
 	"flag"
@@ -21,13 +21,15 @@ import (
 	"strings"
 	"time"
 
-	yaml "gopkg.in/yaml.v2"
-
 	"github.com/boltdb/bolt"
+	"github.com/eiannone/keyboard"
 	"github.com/fatih/color"
 	"github.com/jbrukh/bayesian"
 	"github.com/manishrjain/keys"
 	"github.com/pkg/errors"
+
+	mathex "github.com/pkg/math"
+	yaml "gopkg.in/yaml.v2"
 )
 
 var (
@@ -38,12 +40,11 @@ var (
 	account    = flag.String("a", "", "Name of bank account transactions belong to.")
 	currency   = flag.String("c", "", "Set currency if any.")
 	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
-	dateFormat = flag.String("d", "01/02/2006",
-		"Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
-	skip      = flag.Int("s", 0, "Number of header lines in CSV to skip")
-	configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
-		"Config directory to store various into-ledger configs in.")
-	shortcuts = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
+	dateFormat = flag.String("d", "01/02/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
+	skip       = flag.Int("s", 0, "Number of header lines in CSV to skip")
+	configDir  = flag.String("conf", os.Getenv("HOME")+"/.into-ledger", "Config directory to store various into-ledger configs in.")
+	shortcuts  = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
+	inverse    = flag.Bool("inverse", false, "Inverse sign of transaction amounts in csv.")
 
 	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -82,7 +83,7 @@ type txn struct {
 type byTime []txn
 
 func (b byTime) Len() int               { return len(b) }
-func (b byTime) Less(i int, j int) bool { return !b[i].Date.After(b[j].Date) }
+func (b byTime) Less(i int, j int) bool { return b[i].Date.Before(b[j].Date) }
 func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
 
 func checkf(err error, format string, args ...interface{}) {
@@ -190,6 +191,10 @@ func (p *parser) generateClasses() {
 	for _, a := range p.accounts {
 		tomap[a] = true
 	}
+
+	// remove this account as it would appear in many relevant transactions
+	delete(tomap, *account)
+
 	for to := range tomap {
 		p.classes = append(p.classes, bayesian.Class(to))
 	}
@@ -245,7 +250,7 @@ func (p *parser) topHits(in string) []bayesian.Class {
 	sort.Sort(byScore(pairs))
 	result := make([]bayesian.Class, 0, 5)
 	last := pairs[0].score
-	for i := 0; i < 5; i++ {
+	for i := 0; i < mathex.Min(5, len(pairs)); i++ {
 		pr := pairs[i]
 		if *debug {
 			fmt.Printf("i=%d s=%f Class=%v\n", i, pr.score, p.classes[pr.pos])
@@ -300,7 +305,7 @@ func parseDescription(col string) (string, bool) {
 	}, col), true
 }
 
-func parseTransactionsFromCSV(in []byte) []txn {
+func (p *parser) parseTransactionsFromCSV(in []byte) []txn {
 	ignored := make(map[int]bool)
 	if len(*ignore) > 0 {
 		for _, i := range strings.Split(*ignore, ",") {
@@ -315,10 +320,7 @@ func parseTransactionsFromCSV(in []byte) []txn {
 	var t txn
 	var skipped int
 	for {
-		t = txn{Key: make([]byte, 16)}
-		// Have a unique key for each transaction in CSV, so we can unique identify and
-		// persist them as we modify their category.
-		_, err := rand.Read(t.Key)
+		t = txn{}
 		cols, err := r.Read()
 		if err == io.EOF {
 			break
@@ -339,8 +341,10 @@ func parseTransactionsFromCSV(in []byte) []txn {
 				t.Date = date
 
 			} else if f, ok := parseCurrency(col); ok {
+				if *inverse {
+					f = -f
+				}
 				t.Cur = f
-
 			} else if d, ok := parseDescription(col); ok {
 				t.Desc = d
 			}
@@ -349,6 +353,32 @@ func parseTransactionsFromCSV(in []byte) []txn {
 		if len(t.Desc) != 0 && !t.Date.IsZero() && t.Cur != 0.0 {
 			y, m, d := t.Date.Year(), t.Date.Month(), t.Date.Day()
 			t.Date = time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+
+			// Have a unique key for each transaction in CSV, so we can uniquely identify and
+			// persist them as we modify their category.
+			hash := sha256.New()
+			fmt.Fprintf(hash, "%s\t%s\t%.2f", t.Date.Format(stamp), t.Desc, t.Cur)
+			t.Key = hash.Sum(nil)
+
+			// check if it was reconciled before (in case we are restarted after a crash)
+			p.db.View(func(tx *bolt.Tx) error {
+				b := tx.Bucket(bucketName)
+				v := b.Get(t.Key)
+				if v != nil {
+					dec := gob.NewDecoder(bytes.NewBuffer(v))
+					var td txn
+					if err := dec.Decode(&td); err == nil {
+						if t.Cur < 0 {
+							t.To = td.To
+						} else {
+							t.From = td.From
+						}
+						t.Done = true
+					}
+				}
+				return nil
+			})
+
 			result = append(result, t)
 		} else {
 			fmt.Println()
@@ -433,6 +463,7 @@ func printCategory(t txn) {
 }
 
 func printSummary(t txn, idx, total int) {
+	idx++
 	if t.Done {
 		color.New(color.BgGreen, color.FgBlack).Printf(" R ")
 	} else {
@@ -484,26 +515,6 @@ func (p *parser) writeToDB(t txn) {
 	}
 }
 
-func (p *parser) iterateDB() []txn {
-	var txns []txn
-	if err := p.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName)
-		c := b.Cursor()
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var t txn
-			dec := gob.NewDecoder(bytes.NewBuffer(v))
-			if err := dec.Decode(&t); err != nil {
-				log.Fatalf("Unable to parse txn from value of length: %v. Error: %v", len(v), err)
-			}
-			txns = append(txns, t)
-		}
-		return nil
-	}); err != nil {
-		log.Fatalf("Iterate over db failed with error: %v", err)
-	}
-	return txns
-}
-
 func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) int {
 	label := "default"
 
@@ -517,12 +528,10 @@ LOOP:
 	}
 
 	ks.Print(label, false)
-	r := make([]byte, 1)
-	os.Stdin.Read(r)
-	ch := rune(r[0])
-	if ch == rune(10) && len(t.To) > 0 && len(t.From) > 0 {
-		p.writeToDB(*t)
+	ch, key, _ := keyboard.GetSingleKey()
+	if ch == 0 && key == keyboard.KeyEnter && len(t.To) > 0 && len(t.From) > 0 {
 		t.Done = true
+		p.writeToDB(*t)
 		if repeat {
 			return 0
 		}
@@ -534,6 +543,7 @@ LOOP:
 		case ".back":
 			return -1
 		case ".skip":
+			t.Done = false
 			return 1
 		case ".quit":
 			return 9999
@@ -609,9 +619,8 @@ func (p *parser) showAndCategorizeTxns(rtxns []txn) {
 		fmt.Println()
 
 		fmt.Printf("Found %d transactions. Review (Y/n/q)? ", len(txns))
-		b := make([]byte, 1)
-		os.Stdin.Read(b)
-		if b[0] == 'n' || b[0] == 'q' {
+		ch, _, _ := keyboard.GetSingleKey()
+		if ch == 'n' || ch == 'q' {
 			return
 		}
 
@@ -655,7 +664,6 @@ func sanitize(a string) string {
 		default:
 			return -1
 		}
-		return -1
 	}, a)
 }
 
@@ -665,7 +673,7 @@ func (p *parser) removeDuplicates(txns []txn) []txn {
 	}
 
 	sort.Sort(byTime(p.txns))
-	sort.Sort(byTime(txns))
+	sort.Stable(byTime(txns))
 
 	prev := p.txns
 	first := txns[0].Date.Add(-24 * time.Hour)
@@ -755,12 +763,11 @@ func main() {
 		checkf(err, "Unable to check for output file: %v", *output)
 	}
 
-	tf, err := ioutil.TempFile("", "ledger-csv-txns")
-	checkf(err, "Unable to create temp file")
-	defer os.Remove(tf.Name())
+	tf := path.Join(os.TempDir(), "ledger-csv-txns")
+	defer os.Remove(tf)
 
-	db, err := bolt.Open(tf.Name(), 0600, nil)
-	checkf(err, "Unable to open boltdb at %v", tf.Name())
+	db, err := bolt.Open(tf, 0600, nil)
+	checkf(err, "Unable to open boltdb at %v", tf)
 	defer db.Close()
 
 	db.Update(func(tx *bolt.Tx) error {
@@ -781,7 +788,7 @@ func main() {
 
 	in, err := ioutil.ReadFile(*csvFile)
 	checkf(err, "Unable to read csv file: %v", *csvFile)
-	txns := parseTransactionsFromCSV(in)
+	txns := p.parseTransactionsFromCSV(in)
 	for i := range txns {
 		if txns[i].Cur > 0 {
 			txns[i].To = *account
@@ -794,15 +801,14 @@ func main() {
 	txns = p.removeDuplicates(txns)
 	p.showAndCategorizeTxns(txns)
 
-	final := p.iterateDB()
-	sort.Sort(byTime(final))
-
 	_, err = of.WriteString(fmt.Sprintf("; into-ledger run at %v\n\n", time.Now()))
 	checkf(err, "Unable to write into output file: %v", of.Name())
 
-	for _, t := range final {
-		if _, err := of.WriteString(ledgerFormat(t)); err != nil {
-			log.Fatalf("Unable to write to output: %v", err)
+	for _, t := range txns {
+		if t.Done {
+			if _, err := of.WriteString(ledgerFormat(t)); err != nil {
+				log.Fatalf("Unable to write to output: %v", err)
+			}
 		}
 	}
 	checkf(of.Close(), "Unable to close output file: %v", of.Name())
