@@ -507,7 +507,7 @@ func (p *parser) iterateDB() []txn {
 	return txns
 }
 
-func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) int {
+func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) float64 {
 	label := "default"
 
 	var repeat bool
@@ -527,21 +527,21 @@ LOOP:
 		p.writeToDB(*t)
 		t.Done = true
 		if repeat {
-			return 0
+			return 0.0
 		}
-		return 1
+		return 1.0
 	}
 
 	if opt, has := ks.MapsTo(ch, label); has {
 		switch opt {
 		case ".back":
-			return -1
+			return -1.0
 		case ".skip":
-			return 1
+			return 1.1
 		case ".quit":
-			return 9999
+			return 999999.0
 		case ".show all":
-			return math.MaxInt16
+			return math.MaxFloat32
 		}
 
 		category = append(category, opt)
@@ -559,7 +559,7 @@ LOOP:
 	return 0
 }
 
-func (p *parser) printTxn(t *txn, idx, total int) int {
+func (p *parser) categorizeTxn(t *txn, idx, total int) float64 {
 	clear()
 	printSummary(*t, idx, total)
 	fmt.Println()
@@ -583,14 +583,13 @@ func (p *parser) printTxn(t *txn, idx, total int) int {
 		ks.AutoAssign(string(hit), "default")
 	}
 	res := p.printAndGetResult(ks, t)
-	if res != math.MaxInt16 {
+	if res != math.MaxFloat32 {
 		return res
 	}
 
 	clear()
 	printSummary(*t, idx, total)
-	res = p.printAndGetResult(*short, t)
-	return res
+	return p.printAndGetResult(*short, t)
 }
 
 func (p *parser) showAndCategorizeTxns(rtxns []txn) {
@@ -618,9 +617,52 @@ func (p *parser) showAndCategorizeTxns(rtxns []txn) {
 			return
 		}
 
+		applyToSimilarTxns := func(from int) int {
+			t := txns[from]
+			for i := from + 1; i < len(txns); i++ {
+				dst := &txns[i]
+				if dst.Desc != t.Desc {
+					return i
+				}
+				if math.Signbit(t.Cur) != math.Signbit(dst.Cur) {
+					return i
+				}
+
+				if t.Cur > 0 {
+					dst.From = t.From
+				} else {
+					dst.To = t.To
+				}
+				dst.Done = true
+			}
+			return len(txns)
+		}
+
 		for i := 0; i < len(txns) && i >= 0; {
 			t := &txns[i]
-			i += p.printTxn(t, i, len(txns))
+			res := p.categorizeTxn(t, i, len(txns))
+			if res == 1.0 {
+				upto := applyToSimilarTxns(i)
+				if upto == i+1 {
+					// Did not find anything.
+					i += int(res)
+					continue
+				}
+				clear()
+				printSummary(txns[i], i, len(txns))
+				for j := i + 1; j < upto; j++ {
+					printSummary(txns[j], j, len(txns))
+					p.writeToDB(txns[j])
+				}
+				fmt.Println()
+				fmt.Println("The above txns were similar to the last categorized txns, " +
+					"and were categorized accordingly. Can be changed by skipping back and forth.")
+				r := make([]byte, 1)
+				os.Stdin.Read(r)
+				i = upto
+			} else {
+				i += int(res)
+			}
 		}
 	}
 }
