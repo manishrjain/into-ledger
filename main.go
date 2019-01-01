@@ -151,6 +151,9 @@ func (p *parser) parseTransactions() {
 		} else if strings.HasPrefix(t.To, "Equity:") {
 			// Don't pick up Equity.
 			t.skipClassification = true
+		} else if strings.HasPrefix(t.To, "Liabilities:") {
+			// Don't pick up Liabilities.
+			t.skipClassification = true
 		}
 		t.CurName = cols[4]
 		t.Cur, err = strconv.ParseFloat(cols[5], 64)
@@ -187,8 +190,8 @@ func (p *parser) generateClasses() {
 		}
 		tomap[t.To] = true
 	}
-	for _, a := range p.accounts {
-		tomap[a] = true
+	for class := range tomap {
+		fmt.Printf("[Class] %s\n", class)
 	}
 	for to := range tomap {
 		p.classes = append(p.classes, bayesian.Class(to))
@@ -792,6 +795,13 @@ func main() {
 	}
 
 	txns = p.removeDuplicates(txns)
+	sort.Slice(txns, func(i, j int) bool {
+		cmp := strings.Compare(txns[i].Desc, txns[j].Desc)
+		if cmp != 0 {
+			return cmp < 0
+		}
+		return txns[i].Date.After(txns[j].Date)
+	})
 	p.showAndCategorizeTxns(txns)
 
 	final := p.iterateDB()
