@@ -704,6 +704,58 @@ func sanitize(a string) string {
 	}, a)
 }
 
+// This function would use a rules.yaml file in this format:
+// Expenses:Travel:
+//   - regexp-for-description
+//   - ^LYFT\ +\*RIDE
+// Expenses:Food:
+//   - ^STARBUCKS
+// ...
+// If this file is present, txns would be auto-categorized, if their description
+// mathces the regular expressions provided.
+func (p *parser) categorizeByRules(txns []txn) []txn {
+	fpath := path.Join(*configDir, "rules.yaml")
+	data, err := ioutil.ReadFile(fpath)
+	if err != nil {
+		return txns
+	}
+
+	rules := make(map[string][]string)
+	checkf(yaml.Unmarshal(data, &rules), "Unable to parse auto.yaml confit at %s", fpath)
+
+	matchesCategory := func(t txn) string {
+		for category, patterns := range rules {
+			for _, pattern := range patterns {
+				match, err := regexp.Match(pattern, []byte(t.Desc))
+				checkf(err, "Unable to parse regexp")
+				if match {
+					return category
+				}
+			}
+		}
+		return ""
+	}
+
+	unmatched := txns[:0]
+	var count int
+	for _, t := range txns {
+		if cat := matchesCategory(t); len(cat) > 0 {
+			if t.Cur > 0 {
+				t.From = cat
+			} else {
+				t.To = cat
+			}
+			count++
+			printSummary(t, count, count)
+			p.writeToDB(t)
+		} else {
+			unmatched = append(unmatched, t)
+		}
+	}
+	fmt.Printf("\t%d txns have been auto-categorized.\n\n", len(txns)-len(unmatched))
+	return unmatched
+}
+
 func (p *parser) removeDuplicates(txns []txn) []txn {
 	if len(txns) == 0 {
 		return txns
@@ -844,6 +896,7 @@ func main() {
 		}
 		return txns[i].Date.After(txns[j].Date)
 	})
+	txns = p.categorizeByRules(txns)
 	p.showAndCategorizeTxns(txns)
 
 	final := p.iterateDB()
