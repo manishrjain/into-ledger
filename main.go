@@ -44,6 +44,7 @@ var (
 	configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
 		"Config directory to store various into-ledger configs in.")
 	shortcuts = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
+	// autoBelow = flag.Float64("below", 10.0, "Use default categories for expenses below this amount.")
 
 	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -67,7 +68,7 @@ type configs struct {
 	Accounts map[string]map[string]string // account and the corresponding config.
 }
 
-type txn struct {
+type Txn struct {
 	Date               time.Time
 	Desc               string
 	To                 string
@@ -79,7 +80,7 @@ type txn struct {
 	Done               bool
 }
 
-type byTime []txn
+type byTime []Txn
 
 func (b byTime) Len() int               { return len(b) }
 func (b byTime) Less(i int, j int) bool { return !b[i].Date.After(b[j].Date) }
@@ -118,7 +119,7 @@ func assignForAccount(account string) {
 type parser struct {
 	db       *bolt.DB
 	data     []byte
-	txns     []txn
+	txns     []Txn
 	classes  []bayesian.Class
 	cl       *bayesian.Classifier
 	accounts []string
@@ -128,7 +129,7 @@ func (p *parser) parseTransactions() {
 	out, err := exec.Command("ledger", "-f", *journal, "csv").Output()
 	checkf(err, "Unable to convert journal to csv. Possibly an issue with your ledger installation.")
 	r := csv.NewReader(newConverter(bytes.NewReader(out)))
-	var t txn
+	var t Txn
 	for {
 		cols, err := r.Read()
 		if err == io.EOF {
@@ -136,7 +137,7 @@ func (p *parser) parseTransactions() {
 		}
 		checkf(err, "Unable to read a csv line.")
 
-		t = txn{}
+		t = Txn{}
 		t.Date, err = time.Parse(stamp, cols[0])
 		checkf(err, "Unable to parse time: %v", cols[0])
 		t.Desc = strings.Trim(cols[2], " \n\t")
@@ -303,7 +304,7 @@ func parseDescription(col string) (string, bool) {
 	}, col), true
 }
 
-func parseTransactionsFromCSV(in []byte) []txn {
+func parseTransactionsFromCSV(in []byte) []Txn {
 	ignored := make(map[int]bool)
 	if len(*ignore) > 0 {
 		for _, i := range strings.Split(*ignore, ",") {
@@ -313,12 +314,12 @@ func parseTransactionsFromCSV(in []byte) []txn {
 		}
 	}
 
-	result := make([]txn, 0, 100)
+	result := make([]Txn, 0, 100)
 	r := csv.NewReader(bytes.NewReader(in))
-	var t txn
+	var t Txn
 	var skipped int
 	for {
-		t = txn{Key: make([]byte, 16)}
+		t = Txn{Key: make([]byte, 16)}
 		// Have a unique key for each transaction in CSV, so we can unique identify and
 		// persist them as we modify their category.
 		_, err := rand.Read(t.Key)
@@ -414,7 +415,7 @@ func saneMode() {
 	exec.Command("stty", "-F", "/dev/tty", "sane").Run()
 }
 
-func getCategory(t txn) (prefix, cat string) {
+func getCategory(t Txn) (prefix, cat string) {
 	prefix = "[TO]"
 	cat = t.To
 	if t.Cur > 0 {
@@ -424,7 +425,7 @@ func getCategory(t txn) (prefix, cat string) {
 	return
 }
 
-func printCategory(t txn) {
+func printCategory(t Txn) {
 	prefix, cat := getCategory(t)
 	if len(cat) == 0 {
 		return
@@ -435,7 +436,7 @@ func printCategory(t txn) {
 	color.New(color.BgGreen, color.FgBlack).Printf(" %6s %-20s ", prefix, cat)
 }
 
-func printSummary(t txn, idx, total int) {
+func printSummary(t Txn, idx, total int) {
 	if t.Done {
 		color.New(color.BgGreen, color.FgBlack).Printf(" R ")
 	} else {
@@ -474,7 +475,7 @@ func clear() {
 	fmt.Println()
 }
 
-func (p *parser) writeToDB(t txn) {
+func (p *parser) writeToDB(t Txn) {
 	if err := p.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
 		var val bytes.Buffer
@@ -487,13 +488,13 @@ func (p *parser) writeToDB(t txn) {
 	}
 }
 
-func (p *parser) iterateDB() []txn {
-	var txns []txn
+func (p *parser) iterateDB() []Txn {
+	var txns []Txn
 	if err := p.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
 		c := b.Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var t txn
+			var t Txn
 			dec := gob.NewDecoder(bytes.NewBuffer(v))
 			if err := dec.Decode(&t); err != nil {
 				log.Fatalf("Unable to parse txn from value of length: %v. Error: %v", len(v), err)
@@ -507,7 +508,7 @@ func (p *parser) iterateDB() []txn {
 	return txns
 }
 
-func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) float64 {
+func (p *parser) printAndGetResult(ks keys.Shortcuts, t *Txn) float64 {
 	label := "default"
 
 	var repeat bool
@@ -559,7 +560,7 @@ LOOP:
 	return 0
 }
 
-func (p *parser) categorizeTxn(t *txn, idx, total int) float64 {
+func (p *parser) categorizeTxn(t *Txn, idx, total int) float64 {
 	clear()
 	printSummary(*t, idx, total)
 	fmt.Println()
@@ -592,20 +593,23 @@ func (p *parser) categorizeTxn(t *txn, idx, total int) float64 {
 	return p.printAndGetResult(*short, t)
 }
 
-func (p *parser) showAndCategorizeTxns(rtxns []txn) {
+func (p *parser) classifyTxn(t *Txn) {
+	if !t.Done {
+		hits := p.topHits(t.Desc)
+		if t.Cur < 0 {
+			t.To = string(hits[0])
+		} else {
+			t.From = string(hits[0])
+		}
+	}
+}
+
+func (p *parser) showAndCategorizeTxns(rtxns []Txn) {
 	txns := rtxns
 	for {
 		for i := 0; i < len(txns); i++ {
-			// for i := range txns {
 			t := &txns[i]
-			if !t.Done {
-				hits := p.topHits(t.Desc)
-				if t.Cur < 0 {
-					t.To = string(hits[0])
-				} else {
-					t.From = string(hits[0])
-				}
-			}
+			p.classifyTxn(t)
 			printSummary(*t, i, len(txns))
 		}
 		fmt.Println()
@@ -667,7 +671,7 @@ func (p *parser) showAndCategorizeTxns(rtxns []txn) {
 	}
 }
 
-func ledgerFormat(t txn) string {
+func ledgerFormat(t Txn) string {
 	var b bytes.Buffer
 	b.WriteString(fmt.Sprintf("%s\t%s\n", t.Date.Format(stamp), t.Desc))
 	b.WriteString(fmt.Sprintf("\t%-20s\t%.2f%s\n", t.To, math.Abs(t.Cur), t.CurName))
@@ -704,6 +708,24 @@ func sanitize(a string) string {
 	}, a)
 }
 
+// func (p *parser) categorizeBelow(txns []Txn) []Txn {
+// 	unmatched := txns[:0]
+// 	var count int
+// 	for i := range txns {
+// 		txn := &txns[i]
+// 		if math.Abs(txn.Cur) >= *autoBelow {
+// 			unmatched = append(unmatched, *txn)
+// 		} else {
+// 			count++
+// 			p.classifyTxn(txn)
+// 			printSummary(*txn, count, count)
+// 			p.writeToDB(*txn)
+// 		}
+// 	}
+// 	fmt.Printf("\t%d txns below %.2f have been auto-categorized.\n\n", count, *autoBelow)
+// 	return unmatched
+// }
+
 // This function would use a rules.yaml file in this format:
 // Expenses:Travel:
 //   - regexp-for-description
@@ -713,7 +735,7 @@ func sanitize(a string) string {
 // ...
 // If this file is present, txns would be auto-categorized, if their description
 // mathces the regular expressions provided.
-func (p *parser) categorizeByRules(txns []txn) []txn {
+func (p *parser) categorizeByRules(txns []Txn) []Txn {
 	fpath := path.Join(*configDir, "rules.yaml")
 	data, err := ioutil.ReadFile(fpath)
 	if err != nil {
@@ -723,7 +745,7 @@ func (p *parser) categorizeByRules(txns []txn) []txn {
 	rules := make(map[string][]string)
 	checkf(yaml.Unmarshal(data, &rules), "Unable to parse auto.yaml confit at %s", fpath)
 
-	matchesCategory := func(t txn) string {
+	matchesCategory := func(t Txn) string {
 		for category, patterns := range rules {
 			for _, pattern := range patterns {
 				match, err := regexp.Match(pattern, []byte(t.Desc))
@@ -752,11 +774,11 @@ func (p *parser) categorizeByRules(txns []txn) []txn {
 			unmatched = append(unmatched, t)
 		}
 	}
-	fmt.Printf("\t%d txns have been auto-categorized.\n\n", len(txns)-len(unmatched))
+	fmt.Printf("\t%d txns have been categorized based on rules.\n\n", len(txns)-len(unmatched))
 	return unmatched
 }
 
-func (p *parser) removeDuplicates(txns []txn) []txn {
+func (p *parser) removeDuplicates(txns []Txn) []Txn {
 	if len(txns) == 0 {
 		return txns
 	}
@@ -897,6 +919,7 @@ func main() {
 		return txns[i].Date.After(txns[j].Date)
 	})
 	txns = p.categorizeByRules(txns)
+	// txns = p.categorizeBelow(txns)
 	p.showAndCategorizeTxns(txns)
 
 	final := p.iterateDB()
