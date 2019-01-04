@@ -829,6 +829,8 @@ func oerr(msg string) {
 }
 
 func main() {
+	checkf(GetPlaidTransactions(), "what")
+	return
 	flag.Parse()
 
 	defer saneMode()
