@@ -44,6 +44,21 @@ var (
 	configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
 		"Config directory to store various into-ledger configs in.")
 	shortcuts = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
+
+	pstart = time.Now().Add(-90 * 24 * time.Hour).Format(plaidDate)
+	pend   = time.Now().Format(plaidDate)
+
+	// The following flags are for using Plaid.com integration to auto-fetch txns.
+	usePlaid = flag.Bool("p", false, "Use Plaid to auto-fetch txns."+
+		" You must have set plaid.yaml in conf dir.")
+	plaidSince = flag.String("pfrom", pstart, "YYYY-MM-DD, start date for Plaid txns.")
+	plaidTo    = flag.String("pto", pend,
+		"YYYY-MM-DD, end date for Plaid txns.")
+
+	dupWithin = flag.Int("within", 24, "Consider txns to be dups, if their dates are not"+
+		" more than N hours apart. Description and amount must also match exactly for"+
+		" a txn to be considered duplicate.")
+
 	// autoBelow = flag.Float64("below", 10.0, "Use default categories for expenses below this amount.")
 
 	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
@@ -795,16 +810,22 @@ func (p *parser) removeDuplicates(txns []Txn) []Txn {
 		}
 	}
 
+	allowed := time.Duration(*dupWithin) * time.Hour
+	within := func(a, b time.Time) bool {
+		dur := a.Sub(b)
+		return math.Abs(float64(dur)) <= float64(allowed)
+	}
+
 	final := txns[:0]
 	for _, t := range txns {
 		var found bool
 		tdesc := sanitize(t.Desc)
 		for _, pr := range prev {
-			if pr.Date.After(t.Date) {
+			if pr.Date.After(t.Date.Add(allowed)) {
 				break
 			}
 			pdesc := sanitize(pr.Desc)
-			if tdesc == pdesc && pr.Date.Equal(t.Date) && math.Abs(pr.Cur) == math.Abs(t.Cur) {
+			if tdesc == pdesc && within(pr.Date, t.Date) && math.Abs(pr.Cur) == math.Abs(t.Cur) {
 				printSummary(t, 0, 0)
 				found = true
 				break
@@ -829,8 +850,6 @@ func oerr(msg string) {
 }
 
 func main() {
-	checkf(GetPlaidTransactions(), "what")
-	return
 	flag.Parse()
 
 	defer saneMode()
@@ -900,16 +919,31 @@ func main() {
 	// Scanning done. Now train classifier.
 	p.generateClasses()
 
-	in, err := ioutil.ReadFile(*csvFile)
-	checkf(err, "Unable to read csv file: %v", *csvFile)
-	txns := parseTransactionsFromCSV(in)
+	var txns []Txn
+	switch {
+	case *usePlaid:
+		var err error
+		txns, err = GetPlaidTransactions(*account)
+		checkf(err, "Couldn't get plaid txns")
+		for i := range txns {
+			txns[i].CurName = *currency
+		}
+
+	case len(*csvFile) > 0:
+		in, err := ioutil.ReadFile(*csvFile)
+		checkf(err, "Unable to read csv file: %v", *csvFile)
+		txns = parseTransactionsFromCSV(in)
+
+	default:
+		assertf(false, "Please specify either a CSV flag or a Plaid flag")
+	}
+
 	for i := range txns {
 		if txns[i].Cur > 0 {
 			txns[i].To = *account
 		} else {
 			txns[i].From = *account
 		}
-		txns[i].CurName = *currency
 	}
 
 	txns = p.removeDuplicates(txns)
