@@ -65,7 +65,9 @@ func GetPlaidTransactions(account string) ([]Txn, error) {
 		return nil, err
 	}
 
-	fmt.Printf("data: %s\n", data)
+	if *debug {
+		fmt.Printf("data: %s\n", data)
+	}
 
 	var preq PlaidRequest
 	checkf(yaml.Unmarshal(data, &preq), "Unable to parse plaid.yaml at %s", configPath)
@@ -88,7 +90,9 @@ func GetPlaidTransactions(account string) ([]Txn, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("Request to plaid.com: %s\n", data)
+	if *debug {
+		fmt.Printf("Request to plaid.com: %s\n", data)
+	}
 	buf := bytes.NewBuffer(data)
 	req, err := http.NewRequest("POST", "https://development.plaid.com/transactions/get", buf)
 	if err != nil {
@@ -104,7 +108,9 @@ func GetPlaidTransactions(account string) ([]Txn, error) {
 		return nil, err
 	}
 
-	fmt.Printf("data: %s\n", data)
+	if *debug {
+		fmt.Printf("response: %s\n", data)
+	}
 	pp := &PlaidResponse{}
 	if err := json.Unmarshal(data, pp); err != nil {
 		return nil, err
@@ -113,13 +119,14 @@ func GetPlaidTransactions(account string) ([]Txn, error) {
 	var found bool
 	for _, a := range pp.Accounts {
 		if a.Id == accountId {
+			fmt.Printf("Found account %+v\n", a)
+			fmt.Printf("Balance: %+v\n", a.Bal)
 			found = true
 		}
 	}
 	if !found {
 		return nil, fmt.Errorf("Unable to find any account with id: %q", accountId)
 	}
-	fmt.Printf("Found account %q with id: %q", account, accountId)
 
 	fmt.Println()
 	var txns []Txn
@@ -134,12 +141,14 @@ func GetPlaidTransactions(account string) ([]Txn, error) {
 		t := Txn{
 			Date:    tm,
 			Desc:    txn.Desc,
-			Cur:     txn.Amount,
+			Cur:     -txn.Amount, // Negative because of how Ledger works.
 			CurName: txn.Currency,
 			Key:     []byte(txn.Id),
 		}
 		txns = append(txns, t)
-		fmt.Printf("Txn: %+v\n", txn)
+		if *debug {
+			fmt.Printf("Txn: %+v\n", txn)
+		}
 	}
 	return txns, nil
 }

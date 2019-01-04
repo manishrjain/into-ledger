@@ -969,5 +969,6 @@ func main() {
 			log.Fatalf("Unable to write to output: %v", err)
 		}
 	}
+	fmt.Printf("Transactions written to file: %s\n", of.Name())
 	checkf(of.Close(), "Unable to close output file: %v", of.Name())
 }
