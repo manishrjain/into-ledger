@@ -44,6 +44,8 @@ type PlaidResponse struct {
 
 type PlaidOptions struct {
 	AccountIds []string `json:"account_ids"`
+	Count      int      `json:"count"`
+	Offset     int      `json:"offset"`
 }
 
 type PlaidRequest struct {
@@ -58,35 +60,9 @@ type PlaidRequest struct {
 
 var plaidDate = "2006-01-02"
 
-func GetPlaidTransactions(account string) ([]Txn, error) {
-	configPath := path.Join(*configDir, "plaid.yaml")
-	data, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		return nil, err
-	}
-
-	if *debug {
-		fmt.Printf("data: %s\n", data)
-	}
-
-	var preq PlaidRequest
-	checkf(yaml.Unmarshal(data, &preq), "Unable to parse plaid.yaml at %s", configPath)
-	preq.StartDate = *plaidSince
-	preq.EndDate = *plaidTo
-
-	var accountId string
-	for short, id := range preq.Accounts {
-		if account == short {
-			accountId = id
-		}
-	}
-	if len(accountId) == 0 {
-		return nil, fmt.Errorf("No account %q was found in config\n", accountId)
-	}
-	preq.Opt.AccountIds = []string{accountId}
-
+func googleIt(preq PlaidRequest) (*PlaidResponse, error) {
 	client := &http.Client{}
-	data, err = json.Marshal(preq)
+	data, err := json.Marshal(preq)
 	if err != nil {
 		return nil, err
 	}
@@ -115,39 +91,84 @@ func GetPlaidTransactions(account string) ([]Txn, error) {
 	if err := json.Unmarshal(data, pp); err != nil {
 		return nil, err
 	}
+	return pp, nil
+}
 
-	var found bool
-	for _, a := range pp.Accounts {
-		if a.Id == accountId {
-			fmt.Printf("Found account %+v\n", a)
-			fmt.Printf("Balance: %+v\n", a.Bal)
-			found = true
+func GetPlaidTransactions(account string) ([]Txn, error) {
+	configPath := path.Join(*configDir, "plaid.yaml")
+	data, err := ioutil.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if *debug {
+		fmt.Printf("data: %s\n", data)
+	}
+
+	var preq PlaidRequest
+	checkf(yaml.Unmarshal(data, &preq), "Unable to parse plaid.yaml at %s", configPath)
+	preq.StartDate = *plaidSince
+	preq.EndDate = *plaidTo
+
+	var accountId string
+	for short, id := range preq.Accounts {
+		if account == short {
+			accountId = id
 		}
 	}
-	if !found {
-		return nil, fmt.Errorf("Unable to find any account with id: %q", accountId)
+	if len(accountId) == 0 {
+		return nil, fmt.Errorf("No account %q was found in config\n", accountId)
 	}
+	preq.Opt.AccountIds = []string{accountId}
+	preq.Opt.Count = 500
 
-	fmt.Println()
+	var gotTxns int
 	var txns []Txn
-	for _, txn := range pp.Txns {
-		if txn.Pending || txn.AccountId != accountId {
-			continue
-		}
-		tm, err := time.Parse(plaidDate, txn.Date)
+	for {
+		pp, err := googleIt(preq)
 		if err != nil {
 			return nil, err
 		}
-		t := Txn{
-			Date:    tm,
-			Desc:    txn.Desc,
-			Cur:     -txn.Amount, // Negative because of how Ledger works.
-			CurName: txn.Currency,
-			Key:     []byte(txn.Id),
+
+		var found bool
+		for _, a := range pp.Accounts {
+			if a.Id == accountId {
+				fmt.Printf("Found account %+v\n", a)
+				fmt.Printf("Balance: %+v\n", a.Bal)
+				found = true
+			}
 		}
-		txns = append(txns, t)
-		if *debug {
-			fmt.Printf("Txn: %+v\n", txn)
+		if !found {
+			return nil, fmt.Errorf("Unable to find any account with id: %q", accountId)
+		}
+
+		fmt.Println()
+		for _, txn := range pp.Txns {
+			if txn.Pending || txn.AccountId != accountId {
+				continue
+			}
+			tm, err := time.Parse(plaidDate, txn.Date)
+			if err != nil {
+				return nil, err
+			}
+			t := Txn{
+				Date:    tm,
+				Desc:    txn.Desc,
+				Cur:     -txn.Amount, // Negative because of how Ledger works.
+				CurName: txn.Currency,
+				Key:     []byte(txn.Id),
+			}
+			txns = append(txns, t)
+			if *debug {
+				fmt.Printf("Txn: %+v\n", txn)
+			}
+		}
+		gotTxns += len(pp.Txns)
+		fmt.Printf("Got: %d. Total: %d.", gotTxns, pp.Total)
+		if gotTxns < pp.Total {
+			preq.Opt.Offset = gotTxns
+		} else {
+			break
 		}
 	}
 	return txns, nil
