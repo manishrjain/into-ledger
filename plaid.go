@@ -164,7 +164,7 @@ func GetPlaidTransactions(account string) ([]Txn, error) {
 			}
 		}
 		gotTxns += len(pp.Txns)
-		fmt.Printf("Got: %d. Total: %d.", gotTxns, pp.Total)
+		fmt.Printf("Txns retrieved: %d. Total: %d.\n", gotTxns, pp.Total)
 		if gotTxns < pp.Total {
 			preq.Opt.Offset = gotTxns
 		} else {
