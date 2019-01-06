@@ -51,9 +51,10 @@ var (
 	// The following flags are for using Plaid.com integration to auto-fetch txns.
 	usePlaid = flag.Bool("p", false, "Use Plaid to auto-fetch txns."+
 		" You must have set plaid.yaml in conf dir.")
+
 	plaidSince = flag.String("pfrom", pstart, "YYYY-MM-DD, start date for Plaid txns.")
-	plaidTo    = flag.String("pto", pend,
-		"YYYY-MM-DD, end date for Plaid txns.")
+	plaidTo    = flag.String("pto", pend, "YYYY-MM-DD, end date for Plaid txns.")
+	plaidHist  = flag.Bool("phist", false, "Use Plaid to generate a historical balance.")
 
 	dupWithin = flag.Int("within", 24, "Consider txns to be dups, if their dates are not"+
 		" more than N hours apart. Description and amount must also match exactly for"+
@@ -851,6 +852,11 @@ func oerr(msg string) {
 
 func main() {
 	flag.Parse()
+
+	if *plaidHist {
+		fmt.Printf("Balance history error: %v\n", BalanceHistory(*account))
+		return
+	}
 
 	defer saneMode()
 	singleCharMode()

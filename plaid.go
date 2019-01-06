@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"path"
+	"sort"
 	"time"
 
 	yaml "gopkg.in/yaml.v2"
@@ -94,7 +95,96 @@ func googleIt(preq PlaidRequest) (*PlaidResponse, error) {
 	return pp, nil
 }
 
-func GetPlaidTransactions(account string) ([]Txn, error) {
+func BalanceHistory(account string) error {
+	preq, err := newPlaidRequest(account)
+	if err != nil {
+		return err
+	}
+	preq.StartDate = *plaidSince
+	preq.Opt.Count = 1
+	pp, err := googleIt(*preq)
+	if err != nil {
+		return err
+	}
+	total := pp.Total
+	balance := pp.Accounts[0].Bal.Current
+	fmt.Printf("Balance now: %.2f. Txns: %d\n", balance, total)
+
+	width := 500
+	preq.Opt.Count = width
+	uniq := make(map[string]PlaidTxn)
+	for offset := 0; offset < total; {
+		preq.Opt.Offset = offset
+		fmt.Printf("Using offset: %d\n", offset)
+
+		pp, err := googleIt(*preq)
+		if err != nil {
+			return err
+		}
+		if len(pp.Accounts) == 0 {
+			return fmt.Errorf("No account received for request: %+v\n", preq)
+		}
+
+		if *debug {
+			fmt.Printf("first txn: %+v\n", pp.Txns[0].Id)
+			fmt.Printf("last txn: %+v\n", pp.Txns[len(pp.Txns)-1].Id)
+		}
+
+		var last string
+		var ot int
+		for i, txn := range pp.Txns {
+			if txn.Pending {
+				continue
+			}
+			assertf(txn.AccountId == preq.Opt.AccountIds[0], "Account mismatch")
+			if last != txn.Date {
+				last = txn.Date
+				ot = i // Set offset to date boundaries.
+			}
+			uniq[txn.Date+txn.Id] = txn
+		}
+		if len(pp.Txns) == width {
+			offset = preq.Opt.Offset + ot
+		} else {
+			break
+		}
+	}
+
+	var txns []PlaidTxn
+	for _, txn := range uniq {
+		txns = append(txns, txn)
+	}
+	sort.Slice(txns, func(i, j int) bool {
+		return txns[i].Date > txns[j].Date
+	})
+	fmt.Printf("Latest: %+v\n", txns[0])
+	fmt.Printf("Earliest: %+v\n", txns[len(txns)-1])
+
+	var amts []float64
+	sum := func() float64 {
+		var t float64
+		for _, a := range amts {
+			t += a
+		}
+		return t
+	}
+
+	curDate := preq.EndDate
+	for _, txn := range txns {
+		if txn.Date != curDate {
+			sort.Float64s(amts)
+			fmt.Printf("%s : %8.2f. Amts: %8.2f | %+v\n", curDate, balance, sum(), amts)
+			curDate = txn.Date
+			amts = amts[:0]
+		}
+		balance -= txn.Amount
+		amts = append(amts, txn.Amount)
+	}
+	fmt.Printf("%s : %8.2f. Amts: %8.2f | %+v\n", curDate, balance, sum(), amts)
+	return nil
+}
+
+func newPlaidRequest(account string) (*PlaidRequest, error) {
 	configPath := path.Join(*configDir, "plaid.yaml")
 	data, err := ioutil.ReadFile(configPath)
 	if err != nil {
@@ -105,8 +195,8 @@ func GetPlaidTransactions(account string) ([]Txn, error) {
 		fmt.Printf("data: %s\n", data)
 	}
 
-	var preq PlaidRequest
-	checkf(yaml.Unmarshal(data, &preq), "Unable to parse plaid.yaml at %s", configPath)
+	preq := &PlaidRequest{}
+	checkf(yaml.Unmarshal(data, preq), "Unable to parse plaid.yaml at %s", configPath)
 	preq.StartDate = *plaidSince
 	preq.EndDate = *plaidTo
 
@@ -121,11 +211,20 @@ func GetPlaidTransactions(account string) ([]Txn, error) {
 	}
 	preq.Opt.AccountIds = []string{accountId}
 	preq.Opt.Count = 500
+	return preq, nil
+}
+
+func GetPlaidTransactions(account string) ([]Txn, error) {
+	preq, err := newPlaidRequest(account)
+	if err != nil {
+		return nil, err
+	}
+	accountId := preq.Opt.AccountIds[0]
 
 	var gotTxns int
 	var txns []Txn
 	for {
-		pp, err := googleIt(preq)
+		pp, err := googleIt(*preq)
 		if err != nil {
 			return nil, err
 		}
