@@ -60,7 +60,7 @@ var (
 		" more than N hours apart. Description and amount must also match exactly for"+
 		" a txn to be considered duplicate.")
 
-	// autoBelow = flag.Float64("below", 10.0, "Use default categories for expenses below this amount.")
+	smallBelow = flag.Float64("below", 0.0, "Use Expenses:Small category for txns below this amount.")
 
 	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -724,23 +724,26 @@ func sanitize(a string) string {
 	}, a)
 }
 
-// func (p *parser) categorizeBelow(txns []Txn) []Txn {
-// 	unmatched := txns[:0]
-// 	var count int
-// 	for i := range txns {
-// 		txn := &txns[i]
-// 		if math.Abs(txn.Cur) >= *autoBelow {
-// 			unmatched = append(unmatched, *txn)
-// 		} else {
-// 			count++
-// 			p.classifyTxn(txn)
-// 			printSummary(*txn, count, count)
-// 			p.writeToDB(*txn)
-// 		}
-// 	}
-// 	fmt.Printf("\t%d txns below %.2f have been auto-categorized.\n\n", count, *autoBelow)
-// 	return unmatched
-// }
+func (p *parser) categorizeBelow(txns []Txn) []Txn {
+	unmatched := txns[:0]
+	var count int
+	var total float64
+	for i := range txns {
+		txn := &txns[i]
+		if txn.Cur < 0 && txn.Cur >= -(*smallBelow) {
+			total += txn.Cur
+			count++
+			txn.To = "Expenses:Small"
+			printSummary(*txn, count, count)
+			p.writeToDB(*txn)
+		} else {
+			unmatched = append(unmatched, *txn)
+		}
+	}
+	fmt.Printf("\t%d txns totaling %.2f below %.2f have been categorized as 'Expenses:Small'.\n\n",
+		count, math.Abs(total), *smallBelow)
+	return unmatched
+}
 
 // This function would use a rules.yaml file in this format:
 // Expenses:Travel:
@@ -961,7 +964,7 @@ func main() {
 		return txns[i].Date.After(txns[j].Date)
 	})
 	txns = p.categorizeByRules(txns)
-	// txns = p.categorizeBelow(txns)
+	txns = p.categorizeBelow(txns)
 	p.showAndCategorizeTxns(txns)
 
 	final := p.iterateDB()
