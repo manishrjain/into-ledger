@@ -99,7 +99,7 @@ type Txn struct {
 type byTime []Txn
 
 func (b byTime) Len() int               { return len(b) }
-func (b byTime) Less(i int, j int) bool { return !b[i].Date.After(b[j].Date) }
+func (b byTime) Less(i int, j int) bool { return b[i].Date.Before(b[j].Date) }
 func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
 
 func checkf(err error, format string, args ...interface{}) {
@@ -620,6 +620,8 @@ func (p *parser) classifyTxn(t *Txn) {
 	}
 }
 
+var lettersOnly = regexp.MustCompile("[^a-zA-Z]+")
+
 func (p *parser) showAndCategorizeTxns(rtxns []Txn) {
 	txns := rtxns
 	for {
@@ -639,9 +641,10 @@ func (p *parser) showAndCategorizeTxns(rtxns []Txn) {
 
 		applyToSimilarTxns := func(from int) int {
 			t := txns[from]
+			src := lettersOnly.ReplaceAllString(t.Desc, "")
 			for i := from + 1; i < len(txns); i++ {
 				dst := &txns[i]
-				if dst.Desc != t.Desc {
+				if src != lettersOnly.ReplaceAllString(dst.Desc, "") {
 					return i
 				}
 				if math.Signbit(t.Cur) != math.Signbit(dst.Cur) {
@@ -954,10 +957,21 @@ func main() {
 			txns[i].From = *account
 		}
 	}
+	if len(txns) > 0 {
+		sort.Sort(byTime(txns))
+		fmt.Println("Earliest and Latest transactions:")
+		printSummary(txns[0], 1, 2)
+		printSummary(txns[len(txns)-1], 2, 2)
+		fmt.Println()
+	}
 
-	txns = p.removeDuplicates(txns)
+	txns = p.removeDuplicates(txns) // sorts by date.
+
+	// Now sort by description for the rest of the categorizers.
 	sort.Slice(txns, func(i, j int) bool {
-		cmp := strings.Compare(txns[i].Desc, txns[j].Desc)
+		di := lettersOnly.ReplaceAllString(txns[i].Desc, "")
+		dj := lettersOnly.ReplaceAllString(txns[j].Desc, "")
+		cmp := strings.Compare(di, dj)
 		if cmp != 0 {
 			return cmp < 0
 		}
