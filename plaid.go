@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -11,6 +12,14 @@ import (
 	"time"
 
 	yaml "gopkg.in/yaml.v2"
+)
+
+var (
+	plaidSince = flag.String("pfrom", pstart, "YYYY-MM-DD, start date for Plaid txns.")
+	plaidTo    = flag.String("pto", pend, "YYYY-MM-DD, end date for Plaid txns.")
+	plaidHist  = flag.String("phist", "", "Use Plaid to generate a historical balance."+
+		" Use + for using balance as positive amount, - for negative amount,"+
+		" and 0 for starting with zero balance.")
 )
 
 type PlaidTxn struct {
@@ -106,8 +115,23 @@ func BalanceHistory(account string) error {
 	if err != nil {
 		return err
 	}
+	if len(pp.Accounts) != 1 {
+		return fmt.Errorf("No account found with request: %+v", preq)
+	}
+
 	total := pp.Total
 	balance := pp.Accounts[0].Bal.Current
+	switch *plaidHist {
+	case "+":
+	case "-":
+		balance = 0 - balance
+	case "0":
+		balance = 0
+	default:
+		return fmt.Errorf("Invalid value for phist flag: %q", *plaidHist)
+	}
+
+	fmt.Printf("Got account: %+v\n", pp.Accounts[0])
 	fmt.Printf("Balance now: %.2f. Txns: %d\n", balance, total)
 
 	width := 500
@@ -177,7 +201,7 @@ func BalanceHistory(account string) error {
 			curDate = txn.Date
 			amts = amts[:0]
 		}
-		balance -= txn.Amount
+		balance += txn.Amount
 		amts = append(amts, txn.Amount)
 	}
 	fmt.Printf("%s : %8.2f. Amts: %8.2f | %+v\n", curDate, balance, sum(), amts)
