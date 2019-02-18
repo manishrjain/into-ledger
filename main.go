@@ -572,7 +572,7 @@ LOOP:
 	return 0
 }
 
-func (p *parser) categorizeTxn(t *Txn, idx, total int) float64 {
+func (p *parser) categorizeTxn(t *Txn, idx, total int, ks keys.Shortcuts) float64 {
 	clear()
 	printSummary(*t, idx, total)
 	fmt.Println()
@@ -590,8 +590,8 @@ func (p *parser) categorizeTxn(t *Txn, idx, total int) float64 {
 	fmt.Println()
 
 	hits := p.topHits(t.Desc)
-	var ks keys.Shortcuts
-	setDefaultMappings(&ks)
+	// var ks keys.Shortcuts
+	// setDefaultMappings(&ks)
 	for _, hit := range hits {
 		ks.AutoAssign(string(hit), "default")
 	}
@@ -618,7 +618,7 @@ func (p *parser) classifyTxn(t *Txn) {
 
 var lettersOnly = regexp.MustCompile("[^a-zA-Z]+")
 
-func (p *parser) showAndCategorizeTxns(rtxns []Txn) {
+func (p *parser) showAndCategorizeTxns(rtxns []Txn, short keys.Shortcuts) {
 	txns := rtxns
 	for {
 		for i := 0; i < len(txns); i++ {
@@ -659,7 +659,7 @@ func (p *parser) showAndCategorizeTxns(rtxns []Txn) {
 
 		for i := 0; i < len(txns) && i >= 0; {
 			t := &txns[i]
-			res := p.categorizeTxn(t, i, len(txns))
+			res := p.categorizeTxn(t, i, len(txns), short)
 			if res == 1.0 {
 				upto := applyToSimilarTxns(i)
 				if upto == i+1 {
@@ -975,7 +975,7 @@ func main() {
 	})
 	txns = p.categorizeByRules(txns)
 	txns = p.categorizeBelow(txns)
-	p.showAndCategorizeTxns(txns)
+	p.showAndCategorizeTxns(txns, *short)
 
 	final := p.iterateDB()
 	sort.Sort(byTime(final))
