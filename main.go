@@ -341,6 +341,11 @@ func parseTransactionsFromCSV(in []byte) []Txn {
 		if err == io.EOF {
 			break
 		}
+		if (err != nil) && len(cols) == 0 {
+			// TODO Make this configurable
+			log.Println("Warning: Empty line dropped")
+			continue
+		}
 		checkf(err, "Unable to read line: %v", strings.Join(cols, ", "))
 		if *skip > skipped {
 			skipped++
