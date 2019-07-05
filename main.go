@@ -101,7 +101,7 @@ func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
 
 func checkf(err error, format string, args ...interface{}) {
 	if err != nil {
-		log.Printf(format, args)
+		log.Printf(format, args...)
 		log.Println()
 		log.Fatalf("%+v", errors.WithStack(err))
 	}
@@ -109,7 +109,7 @@ func checkf(err error, format string, args ...interface{}) {
 
 func assertf(ok bool, format string, args ...interface{}) {
 	if !ok {
-		log.Printf(format, args)
+		log.Printf(format, args...)
 		log.Println()
 		log.Fatalf("%+v", errors.Errorf("Should be true, but is false"))
 	}
