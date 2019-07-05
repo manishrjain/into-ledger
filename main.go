@@ -66,10 +66,6 @@ var (
 	short      *keys.Shortcuts
 )
 
-type accountFlags struct {
-	flags map[string]string
-}
-
 type configs struct {
 	Accounts map[string]map[string]string // account and the corresponding config.
 }
