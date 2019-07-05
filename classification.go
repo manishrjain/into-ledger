@@ -74,7 +74,8 @@ LOOP:
 
 	ks.Print(label, false)
 	r := make([]byte, 1)
-	os.Stdin.Read(r)
+	_, err := os.Stdin.Read(r)
+	checkf(err, "Unable to read stdin")
 	ch := rune(r[0])
 	if ch == rune(10) && len(t.To) > 0 && len(t.From) > 0 {
 		p.writeToDB(*t)
@@ -126,7 +127,7 @@ func (p *parser) showAndCategorizeTxns(rtxns []Txn) {
 
 		fmt.Printf("Found %d transactions. Review (Y/n/q)? ", len(txns))
 		b := make([]byte, 1)
-		os.Stdin.Read(b)
+		_, _ = os.Stdin.Read(b)
 		if b[0] == 'n' || b[0] == 'q' {
 			return
 		}
@@ -173,7 +174,7 @@ func (p *parser) showAndCategorizeTxns(rtxns []Txn) {
 				fmt.Println("The above txns were similar to the last categorized txns, " +
 					"and were categorized accordingly. Can be changed by skipping back and forth.")
 				r := make([]byte, 1)
-				os.Stdin.Read(r)
+				_, _ = os.Stdin.Read(r)
 				i = upto
 			} else {
 				i += int(res)
