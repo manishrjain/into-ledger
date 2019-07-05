@@ -752,7 +752,7 @@ func (p *parser) categorizeBelow(txns []Txn) []Txn {
 //   - ^STARBUCKS
 // ...
 // If this file is present, txns would be auto-categorized, if their description
-// mathces the regular expressions provided.
+// matches the regular expressions provided.
 func (p *parser) categorizeByRules(txns []Txn) []Txn {
 	fpath := path.Join(*configDir, "rules.yaml")
 	data, err := ioutil.ReadFile(fpath)
@@ -761,7 +761,7 @@ func (p *parser) categorizeByRules(txns []Txn) []Txn {
 	}
 
 	rules := make(map[string][]string)
-	checkf(yaml.Unmarshal(data, &rules), "Unable to parse auto.yaml confit at %s", fpath)
+	checkf(yaml.Unmarshal(data, &rules), "Unable to parse auto.yaml confict at %s", fpath)
 
 	matchesCategory := func(t Txn) string {
 		for category, patterns := range rules {
