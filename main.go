@@ -35,6 +35,7 @@ var (
 	journal    = flag.String("j", "", "Existing journal to learn from.")
 	output     = flag.String("o", "out.ldg", "Journal file to write to.")
 	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
+	comma      = flag.String("comma", ",", "Separator of fields in csv file")
 	account    = flag.String("a", "", "Name of bank account transactions belong to.")
 	currency   = flag.String("c", "", "Set currency if any.")
 	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
@@ -141,6 +142,7 @@ func (p *parser) parseTransactions() {
 	out, err := exec.Command("ledger", "-f", *journal, "csv").Output()
 	checkf(err, "Unable to convert journal to csv. Possibly an issue with your ledger installation.")
 	r := csv.NewReader(newConverter(bytes.NewReader(out)))
+	r.Comma = []rune(*comma)[0]
 	var t Txn
 	for {
 		cols, err := r.Read()
