@@ -29,7 +29,11 @@ type parser struct {
 }
 
 func (p *parser) parseTransactions() {
-	out, err := exec.Command("ledger", "-f", *journal, "csv").Output()
+	csvCommand := []string{"ledger", "-f", *journal, "csv"}
+	if *ledgerOption != "" {
+		csvCommand = append(csvCommand, *ledgerOption)
+	}
+	out, err := exec.Command(csvCommand[0], (csvCommand[1:])...).Output()
 	checkf(err, "Unable to convert journal to csv. Possibly an issue with your ledger installation.")
 	r := csv.NewReader(newConverter(bytes.NewReader(out)))
 	r.Comma = []rune(*comma)[0]
