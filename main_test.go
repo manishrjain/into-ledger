@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"html/template"
 	"math"
 	"testing"
 	"time"
@@ -27,6 +28,16 @@ func TestLedgerFormat(t *testing.T) {
 		defaultFormat := ledgerFormat(txn, nil)
 		if historical != defaultFormat {
 			t.Errorf("The default format doesn’t follow historical format, got %s, want %s\n", defaultFormat, historical)
+		}
+	})
+
+	t.Run("customTemplate", func(t *testing.T) {
+		customTemplate := "{{.Date.Format \"2006/01/02\"}} * {{.Payee}}\n    {{.To | printf \"%-20s\"}}      {{.Amount}} {{.Currency}}\n    {{.From}}\n\n"
+		tmpl := template.Must(template.New("transaction").Parse(customTemplate))
+		want := "2013/02/03 * Payee\n    Assets:Checking           15.83 USD\n    Expenses:Food\n\n"
+		got := ledgerFormat(txn, tmpl)
+		if got != want {
+			t.Errorf("The result is not expected (template not completely interpreted?), got %s, want %s\n", got, want)
 		}
 	})
 }

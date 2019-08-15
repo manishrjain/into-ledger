@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"html/template"
@@ -278,13 +277,42 @@ func clear() {
 	fmt.Println()
 }
 
+/// Transaction structure for templating
+type TxnTemplate struct {
+	Date     time.Time
+	Payee    string
+	To       string
+	From     string
+	Amount   float64
+	Currency string
+}
+
+func toTxnTemplate(t Txn) TxnTemplate {
+	var tt TxnTemplate
+	tt.Date = t.Date
+	tt.Payee = t.Desc
+	tt.To = t.To
+	tt.From = t.From
+	tt.Amount = t.Cur
+	tt.Currency = t.CurName
+	return tt
+}
+
 /// ledgerFormat formats a string for insertion into a ledger journal.
 /// If template is nil, a default format is used.
 func ledgerFormat(t Txn, tmpl *template.Template) string {
-	var b bytes.Buffer
-	b.WriteString(fmt.Sprintf("%s\t%s\n", t.Date.Format(stamp), t.Desc))
-	b.WriteString(fmt.Sprintf("\t%-20s\t%.2f%s\n", t.To, math.Abs(t.Cur), t.CurName))
-	b.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
+	defaultTemplate := "{{.Date.Format \"2006/01/02\"}}\t{{.Payee}}\n\t{{.To | printf \"%-20s\"}}\t{{.Amount}}{{.Currency}}\n\t{{.From}}\n\n"
+	var err error
+	if tmpl == nil {
+		tmpl, err = template.New("transaction").Parse(defaultTemplate)
+		if err != nil {
+			fmt.Println("err:", err)
+			panic(err)
+		}
+	}
+	var b strings.Builder
+	// var b bytes.Buffer
+	tmpl.Execute(&b, toTxnTemplate(t))
 	return b.String()
 }
 
