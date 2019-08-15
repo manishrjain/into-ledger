@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"html/template"
 	"io/ioutil"
 	"log"
 	"math"
@@ -72,13 +73,27 @@ type configs struct {
 }
 
 type Txn struct {
-	Date               time.Time
-	Desc               string
-	To                 string
-	From               string
-	Cur                float64
-	CurName            string
-	Key                []byte
+	/// Date of the transaction
+	Date time.Time
+
+	/// Payee, extracted from the description of the CSV file most of the time
+	Desc string
+
+	/// Account to money is going into, like 'Expenses:…'
+	To string
+
+	/// Account the money is coming from, like 'Assets:…'
+	From string
+
+	/// Amount
+	Cur float64
+
+	/// Currency, like 'USD'
+	CurName string
+
+	/// For internal use
+	Key []byte
+
 	skipClassification bool
 	Done               bool
 }
@@ -263,7 +278,9 @@ func clear() {
 	fmt.Println()
 }
 
-func ledgerFormat(t Txn) string {
+/// ledgerFormat formats a string for insertion into a ledger journal.
+/// If template is nil, a default format is used.
+func ledgerFormat(t Txn, tmpl *template.Template) string {
 	var b bytes.Buffer
 	b.WriteString(fmt.Sprintf("%s\t%s\n", t.Date.Format(stamp), t.Desc))
 	b.WriteString(fmt.Sprintf("\t%-20s\t%.2f%s\n", t.To, math.Abs(t.Cur), t.CurName))
@@ -403,7 +420,7 @@ func main() {
 	checkf(err, "Unable to write into output file: %v", of.Name())
 
 	for _, t := range final {
-		if _, err := of.WriteString(ledgerFormat(t)); err != nil {
+		if _, err := of.WriteString(ledgerFormat(t, nil)); err != nil {
 			log.Fatalf("Unable to write to output: %v", err)
 		}
 	}
