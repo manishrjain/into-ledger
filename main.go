@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"html/template"
 	"io/ioutil"
 	"log"
 	"math"
@@ -13,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"text/template"
 	"time"
 
 	yaml "gopkg.in/yaml.v2"
@@ -22,6 +22,8 @@ import (
 	"github.com/jbrukh/bayesian"
 	"github.com/manishrjain/keys"
 )
+
+const defaultTxnTemplateString = "{{.Date.Format \"2006/01/02\"}}\t{{.Payee}}\n\t{{.To | printf \"%-20s\"}}\t{{.Amount}}{{.Currency}}\n\t{{.From}}\n\n"
 
 var (
 	debug        = flag.Bool("debug", false, "Additional debug information if set.")
@@ -38,6 +40,8 @@ var (
 	skip      = flag.Int("s", 0, "Number of header lines in CSV to skip")
 	configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
 		"Config directory to store various into-ledger configs in.")
+	txnTemplateString = flag.String("txnTemplate", defaultTxnTemplateString,
+		"Go template to use to produce transactions in the ledger journal")
 	shortcuts = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
 
 	pstart = time.Now().Add(-90 * 24 * time.Hour).Format(plaidDate)
@@ -60,11 +64,12 @@ var (
 	racc   = regexp.MustCompile(`^account[\W]+(.*)`)
 	ralias = regexp.MustCompile(`\balias\s(.*)`)
 
-	stamp      = "2006/01/02"
-	bucketName = []byte("txns")
-	descLength = 40
-	catLength  = 20
-	short      *keys.Shortcuts
+	stamp       = "2006/01/02"
+	bucketName  = []byte("txns")
+	descLength  = 40
+	catLength   = 20
+	short       *keys.Shortcuts
+	txnTemplate *template.Template
 )
 
 type configs struct {
@@ -298,18 +303,9 @@ func toTxnTemplate(t Txn) TxnTemplate {
 	return tt
 }
 
-/// ledgerFormat formats a string for insertion into a ledger journal.
-/// If template is nil, a default format is used.
+/// ledgerFormat formats a string for insertion into a ledger journal, using
+/// provided template.
 func ledgerFormat(t Txn, tmpl *template.Template) string {
-	defaultTemplate := "{{.Date.Format \"2006/01/02\"}}\t{{.Payee}}\n\t{{.To | printf \"%-20s\"}}\t{{.Amount}}{{.Currency}}\n\t{{.From}}\n\n"
-	var err error
-	if tmpl == nil {
-		tmpl, err = template.New("transaction").Parse(defaultTemplate)
-		if err != nil {
-			fmt.Println("err:", err)
-			panic(err)
-		}
-	}
 	var b strings.Builder
 	// var b bytes.Buffer
 	tmpl.Execute(&b, toTxnTemplate(t))
@@ -357,6 +353,9 @@ func main() {
 	data, err = ioutil.ReadFile(*journal)
 	checkf(err, "Unable to read file: %v", *journal)
 	alldata := includeAll(path.Dir(*journal), data)
+
+	txnTemplate, err = template.New("transaction").Parse(*txnTemplateString)
+	checkf(err, "Unable to parse transaction template %v", txnTemplateString)
 
 	if len(*output) == 0 {
 		oerr("Please specify the output file")

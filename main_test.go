@@ -3,9 +3,9 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"html/template"
 	"math"
 	"testing"
+	"text/template"
 	"time"
 )
 
@@ -25,7 +25,8 @@ func TestLedgerFormat(t *testing.T) {
 			b.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
 			return b.String()
 		}(txn)
-		defaultFormat := ledgerFormat(txn, nil)
+		tmpl := template.Must(template.New("transaction").Parse(defaultTxnTemplateString))
+		defaultFormat := ledgerFormat(txn, tmpl)
 		if historical != defaultFormat {
 			t.Errorf("The default format doesn’t follow historical format, got %s, want %s\n", defaultFormat, historical)
 		}
