@@ -25,6 +25,9 @@ import (
 
 const defaultTxnTemplateString = "{{.Date.Format \"2006/01/02\"}}\t{{.Payee}}\n\t{{.To | printf \"%-20s\"}}\t{{.Amount}}{{.Currency}}\n\t{{.From}}\n\n"
 
+/// Name for a pseudo-account holding common configuration to all accounts
+const commonAccount = "_"
+
 var (
 	debug        = flag.Bool("debug", false, "Additional debug information if set.")
 	journal      = flag.String("j", "", "Existing journal to learn from.")
@@ -339,10 +342,29 @@ func main() {
 		checkf(yaml.Unmarshal(data, &c), "Unable to unmarshal yaml config at %v", configPath)
 		if ac, has := c.Accounts[*account]; has {
 			fmt.Printf("Using flags from config: %+v\n", ac)
+			/// Merge common setting before using settings for this account
+			if defaultAc, has := c.Accounts[commonAccount]; has {
+				if *debug {
+					fmt.Println("Setting common flags")
+				}
+				for k, v := range defaultAc {
+					flag.Set(k, v)
+					if *debug {
+						fmt.Printf("Set common flag '%v' to '%v'\n", k, v)
+					}
+				}
+			}
+			if *debug {
+				fmt.Printf("Setting flags for account %v\n", *account)
+			}
 			for k, v := range ac {
 				flag.Set(k, v)
 			}
+		} else if *debug {
+			fmt.Println("No flag set from config")
 		}
+	} else if *debug {
+		fmt.Printf("No config file found at %v\n", configPath)
 	}
 	keyfile := path.Join(*configDir, *shortcuts)
 	short = keys.ParseConfig(keyfile)
@@ -358,7 +380,7 @@ func main() {
 	alldata := includeAll(path.Dir(*journal), data)
 
 	txnTemplate, err = template.New("transaction").Parse(*txnTemplateString)
-	checkf(err, "Unable to parse transaction template %v", txnTemplateString)
+	checkf(err, "Unable to parse transaction template %v", *txnTemplateString)
 
 	if len(*output) == 0 {
 		oerr("Please specify the output file")
