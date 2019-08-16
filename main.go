@@ -306,6 +306,9 @@ func toTxnTemplate(t Txn) TxnTemplate {
 /// ledgerFormat formats a string for insertion into a ledger journal, using
 /// provided template.
 func ledgerFormat(t Txn, tmpl *template.Template) string {
+	if *debug {
+		fmt.Printf("ledgerFormat: tmpl: %v\n", *tmpl)
+	}
 	var b strings.Builder
 	// var b bytes.Buffer
 	tmpl.Execute(&b, toTxnTemplate(t))
@@ -447,7 +450,7 @@ func main() {
 	checkf(err, "Unable to write into output file: %v", of.Name())
 
 	for _, t := range final {
-		if _, err := of.WriteString(ledgerFormat(t, nil)); err != nil {
+		if _, err := of.WriteString(ledgerFormat(t, txnTemplate)); err != nil {
 			log.Fatalf("Unable to write to output: %v", err)
 		}
 	}
