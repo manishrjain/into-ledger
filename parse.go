@@ -210,6 +210,8 @@ func parseTransactionsFromCSV(in []byte) []Txn {
 			}
 		}
 
+		t.CurName = *currency
+
 		if len(t.Desc) != 0 && !t.Date.IsZero() && t.Cur != 0.0 {
 			y, m, d := t.Date.Year(), t.Date.Month(), t.Date.Day()
 			t.Date = time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
