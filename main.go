@@ -23,7 +23,7 @@ import (
 	"github.com/manishrjain/keys"
 )
 
-const defaultTxnTemplateString = "{{.Date.Format \"2006/01/02\"}}\t{{.Payee}}\n\t{{.To | printf \"%-20s\"}}\t{{.Amount}}{{.Currency}}\n\t{{.From}}\n\n"
+const defaultTxnTemplateString = "{{.Date.Format \"2006/01/02\"}}\t{{.Payee}}\n\t{{.To | printf \"%-20s\"}}\t{{.Amount | printf `%.2f`}}{{.Currency}}\n\t{{.From}}\n\n"
 
 /// Name for a pseudo-account holding common configuration to all accounts
 const commonAccount = "_"
