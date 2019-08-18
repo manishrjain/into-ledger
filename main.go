@@ -309,9 +309,6 @@ func toTxnTemplate(t Txn) TxnTemplate {
 /// ledgerFormat formats a string for insertion into a ledger journal, using
 /// provided template.
 func ledgerFormat(t Txn, tmpl *template.Template) string {
-	if *debug {
-		fmt.Printf("ledgerFormat: tmpl: %v\n", *tmpl)
-	}
 	var b strings.Builder
 	// var b bytes.Buffer
 	tmpl.Execute(&b, toTxnTemplate(t))
