@@ -13,11 +13,15 @@ Features:
 - *Deduplication*        : Deduplicates incoming transactions from CSV against the transactions already present in ledger journal. This allows an easy resume from a broken workflow.
 - *Nice UI*              : Colors and formatting, because it's not just about getting things done. It's also about making them look nice!
 
+This fork adds:
+- *Proper manual*: TODO
+- *Support of payee aliases*: file with internal aliases (TODO)
+- *Improved code quality*: from to (TODO insert shields)
 
 Install
 -------
 
-`go get -v -u github.com/manishrjain/into-ledger`
+`go get -v -u github.com/cj-rs/into-ledger`
 
 
 Help
