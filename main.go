@@ -421,9 +421,6 @@ func main() {
 		var err error
 		txns, err = GetPlaidTransactions(*account)
 		checkf(err, "Couldn't get plaid txns")
-		for i := range txns {
-			txns[i].CurName = *currency
-		}
 
 	case len(*csvFile) > 0:
 		in, err := ioutil.ReadFile(*csvFile)
@@ -435,6 +432,7 @@ func main() {
 	}
 
 	for i := range txns {
+		txns[i].CurName = *currency
 		if txns[i].Cur > 0 {
 			txns[i].To = *account
 		} else {
