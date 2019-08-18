@@ -346,7 +346,7 @@ func main() {
 	checkf(err, "Unable to read file: %v", *journal)
 	alldata := includeAll(path.Dir(*journal), data)
 
-	txnTemplate, err = template.New("transaction").Parse(*txnTemplateString)
+	txnTemplate, err = newTransactionTemplate(*txnTemplateString)
 	checkf(err, "Unable to parse transaction template %v", *txnTemplateString)
 
 	if len(*output) == 0 {

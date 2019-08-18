@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"testing"
-	"text/template"
 	"time"
 )
 
@@ -25,7 +24,11 @@ func TestLedgerFormat(t *testing.T) {
 			b.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
 			return b.String()
 		}(txn)
-		tmpl := template.Must(template.New("transaction").Parse(defaultTxnTemplateString))
+		tmpl, err := newTransactionTemplate(defaultTxnTemplateString)
+		if err != nil {
+			t.Errorf("Error while parsing template, %v\n", err)
+			panic(err)
+		}
 		defaultFormat := ledgerFormat(txn, tmpl)
 		if historical != defaultFormat {
 			t.Errorf("The default format doesn’t follow historical format, got %s, want %s\n", defaultFormat, historical)
@@ -34,11 +37,42 @@ func TestLedgerFormat(t *testing.T) {
 
 	t.Run("customTemplate", func(t *testing.T) {
 		customTemplate := "{{.Date.Format \"2006/01/02\"}} * {{.Payee}}\n    {{.To | printf \"%-20s\"}}      {{.Amount}} {{.Currency}}\n    {{.From}}\n\n"
-		tmpl := template.Must(template.New("transaction").Parse(customTemplate))
+		tmpl, err := newTransactionTemplate(customTemplate)
+		if err != nil {
+			t.Errorf("Error while parsing template, %v\n", err)
+			panic(err)
+		}
 		want := "2013/02/03 * Payee\n    Assets:Checking           15.83 USD\n    Expenses:Food\n\n"
 		got := ledgerFormat(txn, tmpl)
 		if got != want {
 			t.Errorf("The result is not expected (template not completely interpreted?), got %s, want %s\n", got, want)
+		}
+	})
+
+	t.Run("customTemplateWithHumanNumber", func(t *testing.T) {
+		customTemplate := "{{.Date.Format \"2006/01/02\"}} * {{.Payee}}\n    {{.To | printf \"%-20s\"}}      {{.Amount | commaFloat }} {{.Currency}}\n    {{.From}}    {{.Amount | humanFloat `#|###,###`}}\n\n"
+		tmpl, err := newTransactionTemplate(customTemplate)
+		if err != nil {
+			t.Errorf("Error while parsing template, %v\n", err)
+			panic(err)
+		}
+		want := "2013/02/03 * Payee\n    Assets:Checking           15,83 USD\n    Expenses:Food    15,830\n\n"
+		got := ledgerFormat(txn, tmpl)
+		if got != want {
+			t.Errorf("The result is not expected (template not completely interpreted?), got %s, want %s\n", got, want)
+		}
+	})
+
+	t.Run("customTemplateWithUUID", func(t *testing.T) {
+		customTemplate := "{{uuid}}"
+		tmpl, err := newTransactionTemplate(customTemplate)
+		if err != nil {
+			t.Errorf("Error while parsing template, %v\n", err)
+			panic(err)
+		}
+		got := ledgerFormat(txn, tmpl)
+		if got == "" {
+			t.Errorf("The uuid function did not expand")
 		}
 	})
 }
