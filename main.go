@@ -310,7 +310,6 @@ func toTxnTemplate(t Txn) TxnTemplate {
 /// provided template.
 func ledgerFormat(t Txn, tmpl *template.Template) string {
 	var b strings.Builder
-	// var b bytes.Buffer
 	tmpl.Execute(&b, toTxnTemplate(t))
 	return b.String()
 }
