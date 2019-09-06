@@ -50,10 +50,17 @@ func runCommand(name string, arg ...string) []string {
 }
 
 /// FuzzySelect prompts the user to select one or more items in a fuzzy menu.
-func fuzzySelect(items []string) (selected []string) {
+/// If prompt is set "", a default prompt is used. Query is used to fill the
+/// search field
+func fuzzySelect(items []string, prompt string, query string) (selected []string) {
+	args := []string{}
+	if prompt != "" {
+		args = append(args, "--prompt", prompt+" >")
+	}
+	args = append(args, "--query", query)
 	// Inspired from https://stackoverflow.com/a/23167416/ by mraron (Apache
 	// 2.0 licence)
-	subProcess := exec.Command("fzf")
+	subProcess := exec.Command("fzf", args...)
 	stdin, err := subProcess.StdinPipe()
 	if err != nil {
 		log.Fatal(err)

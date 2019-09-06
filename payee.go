@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // +gen set
 type Payee = string
@@ -25,7 +28,7 @@ func performPayeeTranslation(txns []Txn, payeeTranslations map[string]string,
 			} else {
 				fmt.Printf("Unknown payee: '%v'\n", payee)
 				// TODO Add fzf selection here (or something else)
-				payees := fuzzySelect(existingPayees.ToSlice())
+				payees := fuzzySelect(existingPayees.ToSlice(), payee, strings.ToLower(payee))
 				if len(payees) > 0 {
 					replacement := payees[0]
 					payeeTranslations[payee] = replacement
