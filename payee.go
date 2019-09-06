@@ -39,6 +39,8 @@ func (ps *PayeeSubstitutions) Persist(path string) {
 // without existing substitution
 func performPayeeSubstitution(txns []Txn, subst PayeeSubstitutions,
 	existingPayees *PayeeSet) {
+	// Continously select with fuzzy menu, without asking
+	fuzzyContinous := false
 TxnLoop:
 	for i := range txns {
 		txn := &txns[i]
@@ -47,12 +49,20 @@ TxnLoop:
 			if replacement, has := subst[payee]; has {
 				txn.Desc = replacement
 			} else {
-				fmt.Printf("Unknown payee: '%v' ([F]uzzy select/[i]gnore/ignore [a]ll):", payee)
-				b := make([]byte, 1)
-				_, _ = os.Stdin.Read(b)
-				fmt.Println()
-				switch strings.ToLower(string(b)) {
-				case "a":
+				answer := "f"
+				if !fuzzyContinous {
+					fmt.Printf("Unknown payee: '%v' ([F]uzzy select/Fuzzy select [a]ll/[i]gnore/ig[n]ore all): ", payee)
+					b := make([]byte, 1)
+					_, _ = os.Stdin.Read(b)
+					fmt.Println()
+					answer = strings.ToLower(string(b))
+				}
+				if answer == "a" {
+					fuzzyContinous = true
+					answer = "f"
+				}
+				switch answer {
+				case "n":
 					break TxnLoop
 				case "i":
 					continue TxnLoop
