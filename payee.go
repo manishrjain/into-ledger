@@ -15,17 +15,21 @@ func listPayee() PayeeSet {
 	return NewPayeeSet(payees...)
 }
 
-// performPayeeTranslation(txns, payeeTranslations, existingPayees) change
-// (for each txn) payee that are keys of payeeTranslations to the ass. Display
-// a warning for payee not in existingPayees and without translation
-func performPayeeTranslation(txns []Txn, payeeTranslations map[string]string,
+/// Substitution from key to value of payee name
+type PayeeSubstitutions map[string]string
+
+// performPayeeSubstitution(txns, payeeSubstitutions, existingPayees) change
+// (for each txn) payee that are keys of payeeSubstitutions to the ass. Display
+// a fuzzy selection menu among existing payee not in existingPayees and
+// without existing substitution
+func performPayeeSubstitution(txns []Txn, subst PayeeSubstitutions,
 	existingPayees *PayeeSet) {
 TxnLoop:
 	for i := range txns {
 		txn := &txns[i]
 		payee := txn.Desc
 		if !existingPayees.Contains(payee) {
-			if replacement, has := payeeTranslations[payee]; has {
+			if replacement, has := subst[payee]; has {
 				txn.Desc = replacement
 			} else {
 				fmt.Printf("Unknown payee: '%v' ([F]uzzy select/[i]gnore/ignore [a]ll):", payee)
@@ -41,7 +45,7 @@ TxnLoop:
 					payees := fuzzySelect(existingPayees.ToSlice(), payee, strings.ToLower(payee))
 					if len(payees) > 0 {
 						replacement := payees[0]
-						payeeTranslations[payee] = replacement
+						subst[payee] = replacement
 						txn.Desc = replacement
 					} else {
 						fmt.Println("Nothing selected")
