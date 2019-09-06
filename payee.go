@@ -15,7 +15,7 @@ func listPayee() PayeeSet {
 // (for each txn) payee that are keys of payeeTranslations to the ass. Display
 // a warning for payee not in existingPayees and without translation
 func performPayeeTranslation(txns []Txn, payeeTranslations map[string]string,
-	existingPayees PayeeSet) {
+	existingPayees *PayeeSet) {
 	for i := range txns {
 		txn := &txns[i]
 		payee := txn.Desc
@@ -24,7 +24,15 @@ func performPayeeTranslation(txns []Txn, payeeTranslations map[string]string,
 				txn.Desc = replacement
 			} else {
 				fmt.Printf("Unknown payee: '%v'\n", payee)
-				// TODO Add fzf selection here
+				// TODO Add fzf selection here (or something else)
+				payees := fuzzySelect(existingPayees.ToSlice())
+				if len(payees) > 0 {
+					replacement := payees[0]
+					payeeTranslations[payee] = replacement
+					txn.Desc = replacement
+				} else {
+					fmt.Println("Nothing selected")
+				}
 			}
 		}
 	}

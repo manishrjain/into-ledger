@@ -417,7 +417,7 @@ func main() {
 		}
 	}
 	if len(txns) > 0 {
-		performPayeeTranslation(txns, payeeTrans, existingPayees)
+		performPayeeTranslation(txns, payeeTrans, &existingPayees)
 		sort.Sort(byTime(txns))
 		fmt.Println("Earliest and Latest transactions:")
 		printSummary(txns[0], 1, 2)
