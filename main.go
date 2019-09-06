@@ -345,7 +345,7 @@ func main() {
 	if err == nil {
 		checkf(yaml.Unmarshal(data, &payeeTrans), "Unable to unmarshal yaml config at %v", payeeTranslationsPath)
 	} else if *debug {
-		fmt.Printf("No payeeTranslation file found at %v\n", payeeTranslationsPath)
+		fmt.Printf("No payee translation file found at %v\n", payeeTranslationsPath)
 	}
 
 	if len(*journal) == 0 {

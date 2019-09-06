@@ -16,13 +16,15 @@ func listPayee() PayeeSet {
 // a warning for payee not in existingPayees and without translation
 func performPayeeTranslation(txns []Txn, payeeTranslations map[string]string,
 	existingPayees PayeeSet) {
-	for _, txn := range txns {
+	for i := range txns {
+		txn := &txns[i]
 		payee := txn.Desc
 		if !existingPayees.Contains(payee) {
 			if replacement, has := payeeTranslations[payee]; has {
 				txn.Desc = replacement
 			} else {
 				fmt.Printf("Unknown payee: '%v'\n", payee)
+				// TODO Add fzf selection here
 			}
 		}
 	}
