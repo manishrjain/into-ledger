@@ -45,7 +45,8 @@ var (
 		"Config directory to store various into-ledger configs in.")
 	txnTemplateString = flag.String("txnTemplate", defaultTxnTemplateString,
 		"Go template to use to produce transactions in the ledger journal")
-	shortcuts = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
+	shortcuts             = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
+	payeeTranslationsFile = flag.String("payeetrans", "payeetrans.yaml", "Name of payee translations file.")
 
 	pstart = time.Now().Add(-90 * 24 * time.Hour).Format(plaidDate)
 	pend   = time.Now().Format(plaidDate)
@@ -67,12 +68,14 @@ var (
 	racc   = regexp.MustCompile(`^account[\W]+(.*)`)
 	ralias = regexp.MustCompile(`\balias\s(.*)`)
 
-	stamp       = "2006/01/02"
-	bucketName  = []byte("txns")
-	descLength  = 40
-	catLength   = 20
-	short       *keys.Shortcuts
-	txnTemplate *template.Template
+	stamp          = "2006/01/02"
+	bucketName     = []byte("txns")
+	descLength     = 40
+	catLength      = 20
+	existingPayees = NewPayeeSet()           // Payee existing in the journal before running this command
+	payeeTrans     = make(map[string]string) // Translation from key to value of payee name
+	short          *keys.Shortcuts
+	txnTemplate    *template.Template
 )
 
 type configs struct {
@@ -337,6 +340,13 @@ func main() {
 	short = keys.ParseConfig(keyfile)
 	setDefaultMappings(short)
 	defer short.Persist(keyfile)
+	payeeTranslationsPath := path.Join(*configDir, *payeeTranslationsFile)
+	data, err = ioutil.ReadFile(payeeTranslationsPath)
+	if err == nil {
+		checkf(yaml.Unmarshal(data, &payeeTrans), "Unable to unmarshal yaml config at %v", payeeTranslationsPath)
+	} else if *debug {
+		fmt.Printf("No payeeTranslation file found at %v\n", payeeTranslationsPath)
+	}
 
 	if len(*journal) == 0 {
 		oerr("Please specify the input ledger journal file")
@@ -407,6 +417,7 @@ func main() {
 		}
 	}
 	if len(txns) > 0 {
+		performPayeeTranslation(txns, payeeTrans, existingPayees)
 		sort.Sort(byTime(txns))
 		fmt.Println("Earliest and Latest transactions:")
 		printSummary(txns[0], 1, 2)

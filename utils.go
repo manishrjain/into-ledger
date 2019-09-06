@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os/exec"
+	"strings"
 
 	"github.com/fatih/color"
 	"github.com/pkg/errors"
@@ -33,4 +35,13 @@ func oerr(msg string) {
 	fmt.Println("Flags available:")
 	flag.PrintDefaults()
 	fmt.Println()
+}
+
+/// runCommand excute the given cmd and return the list of lines outputed on
+/// stdout
+func runCommand(name string, arg ...string) []string {
+	cmd := exec.Command(name, arg...)
+	out, err := cmd.Output()
+	checkf(err, "Error running `%v`: `%v`", name, arg)
+	return strings.Split(string(out), "\n")
 }

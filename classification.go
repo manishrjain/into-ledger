@@ -260,7 +260,6 @@ func sanitize(a string) string {
 		default:
 			return -1
 		}
-		return -1
 	}, a)
 }
 
