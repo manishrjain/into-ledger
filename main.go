@@ -347,6 +347,7 @@ func main() {
 	} else if *debug {
 		fmt.Printf("No payee substitution file found at %v\n", payeeSubstitutionsPath)
 	}
+	defer payeeSubsts.Persist(payeeSubstitutionsPath)
 	existingPayees = listPayee()
 
 	if len(*journal) == 0 {

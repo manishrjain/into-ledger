@@ -2,8 +2,12 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
+	"log"
 	"os"
 	"strings"
+
+	yaml "gopkg.in/yaml.v2"
 )
 
 // +gen set
@@ -17,6 +21,17 @@ func listPayee() PayeeSet {
 
 /// Substitution from key to value of payee name
 type PayeeSubstitutions map[string]string
+
+func (ps *PayeeSubstitutions) Persist(path string) {
+	data, err := yaml.Marshal(*ps)
+	if err != nil {
+		log.Fatalf("marshal payee substitutions: %v", err)
+	}
+
+	if err := ioutil.WriteFile(path, data, 0644); err != nil {
+		log.Fatalf("While writing payee substitutions to file '%v': %v", path, err)
+	}
+}
 
 // performPayeeSubstitution(txns, payeeSubstitutions, existingPayees) change
 // (for each txn) payee that are keys of payeeSubstitutions to the ass. Display
