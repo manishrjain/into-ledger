@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -19,6 +20,7 @@ func listPayee() PayeeSet {
 // a warning for payee not in existingPayees and without translation
 func performPayeeTranslation(txns []Txn, payeeTranslations map[string]string,
 	existingPayees *PayeeSet) {
+TxnLoop:
 	for i := range txns {
 		txn := &txns[i]
 		payee := txn.Desc
@@ -26,15 +28,24 @@ func performPayeeTranslation(txns []Txn, payeeTranslations map[string]string,
 			if replacement, has := payeeTranslations[payee]; has {
 				txn.Desc = replacement
 			} else {
-				fmt.Printf("Unknown payee: '%v'\n", payee)
-				// TODO Add fzf selection here (or something else)
-				payees := fuzzySelect(existingPayees.ToSlice(), payee, strings.ToLower(payee))
-				if len(payees) > 0 {
-					replacement := payees[0]
-					payeeTranslations[payee] = replacement
-					txn.Desc = replacement
-				} else {
-					fmt.Println("Nothing selected")
+				fmt.Printf("Unknown payee: '%v' ([F]uzzy select/[i]gnore/ignore [a]ll):", payee)
+				b := make([]byte, 1)
+				_, _ = os.Stdin.Read(b)
+				fmt.Println()
+				switch strings.ToLower(string(b)) {
+				case "a":
+					break TxnLoop
+				case "i":
+					continue TxnLoop
+				default:
+					payees := fuzzySelect(existingPayees.ToSlice(), payee, strings.ToLower(payee))
+					if len(payees) > 0 {
+						replacement := payees[0]
+						payeeTranslations[payee] = replacement
+						txn.Desc = replacement
+					} else {
+						fmt.Println("Nothing selected")
+					}
 				}
 			}
 		}
