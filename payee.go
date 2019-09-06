@@ -7,7 +7,7 @@ type Payee = string
 
 // TODO Make this asynchronous
 func listPayee() PayeeSet {
-	payees := runCommand("ledger", "-f", *journal, "payee")
+	payees := runCommand("ledger", "-f", *journal, "payees")
 	return NewPayeeSet(payees...)
 }
 

@@ -58,16 +58,18 @@ func fuzzySelect(items []string) (selected []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// subProcess.Stdout = os.Stdout
 	stdout, err := subProcess.StdoutPipe()
+	if err != nil {
+		log.Fatal(err)
+	}
 	subProcess.Stderr = os.Stderr
 	err = subProcess.Start()
 	checkf(err, "Error running fzf. Is https://github.com/junegunn/fzf installed?")
 	io.WriteString(stdin, strings.Join(items, "\n"))
-	subProcess.Wait()
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(stdout)
 	s := buf.String()
+	subProcess.Wait()
 	for _, s := range strings.Split(s, "\n") {
 		if s != "" {
 			selected = append(selected, s)

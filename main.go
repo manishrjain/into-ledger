@@ -347,6 +347,7 @@ func main() {
 	} else if *debug {
 		fmt.Printf("No payee translation file found at %v\n", payeeTranslationsPath)
 	}
+	existingPayees = listPayee()
 
 	if len(*journal) == 0 {
 		oerr("Please specify the input ledger journal file")
