@@ -67,16 +67,21 @@ TxnLoop:
 				case "i":
 					continue TxnLoop
 				default:
-					payees := fuzzySelect(existingPayees.ToSlice(), payee, strings.ToLower(payee))
-					if len(payees) > 0 {
-						replacement := payees[0]
-						subst[payee] = replacement
-						txn.Desc = replacement
-					} else {
-						fmt.Println("Nothing selected")
-					}
+					fuzzySelectUpdateTxn(txn, subst, payee, existingPayees)
 				}
 			}
 		}
+	}
+}
+
+func fuzzySelectUpdateTxn(txn *Txn, subst PayeeSubstitutions, payee string,
+	existingPayees *PayeeSet) {
+	payees := fuzzySelect(existingPayees.ToSlice(), payee, strings.ToLower(payee))
+	if len(payees) > 0 {
+		replacement := payees[0]
+		subst[payee] = replacement
+		txn.Desc = replacement
+	} else {
+		fmt.Println("Nothing selected")
 	}
 }
