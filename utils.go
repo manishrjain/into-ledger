@@ -43,10 +43,6 @@ func oerr(msg string) {
 /// runCommand excute the given cmd and return the list of lines outputed on
 /// stdout
 func runCommand(name string, arg ...string) []string {
-
-	// XXX
-	fmt.Println(append([]string{"CMD: ", name}, arg...))
-
 	cmd := exec.Command(name, arg...)
 	out, err := cmd.Output()
 	checkf(err, "Error running `%v`: `%v`", name, arg)
@@ -55,11 +51,16 @@ func runCommand(name string, arg ...string) []string {
 
 /// FuzzySelect prompts the user to select one or more items in a fuzzy menu.
 /// If prompt is set "", a default prompt is used. Query is used to fill the
-/// search field
-func fuzzySelect(items []string, prompt string, query string) (selected []string) {
+/// search field. The returnQuery returns what the user searched for
+func fuzzySelect(items []string, prompt string, query string, returnQuery bool) (selected []string) {
+	// TODO Find a more idiomatic way
 	args := []string{}
 	if prompt != "" {
 		args = append(args, "--prompt", prompt+" >")
+	}
+	if returnQuery {
+		// Print what the user entered first-line
+		args = append(args, "--print-query")
 	}
 	args = append(args, "--query", query)
 	// Inspired from https://stackoverflow.com/a/23167416/ by mraron (Apache
@@ -81,8 +82,12 @@ func fuzzySelect(items []string, prompt string, query string) (selected []string
 	buf.ReadFrom(stdout)
 	s := buf.String()
 	subProcess.Wait()
-	for _, s := range strings.Split(s, "\n") {
-		if s != "" {
+	for i, s := range strings.Split(s, "\n") {
+		switch {
+		// Always keep user query even if it is empty
+		case returnQuery && i == 0:
+			selected = append(selected, s)
+		case s != "":
 			selected = append(selected, s)
 		}
 	}

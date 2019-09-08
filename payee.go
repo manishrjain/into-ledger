@@ -78,12 +78,26 @@ TxnLoop:
 
 func fuzzySelectUpdateTxn(txn *Txn, subst PayeeSubstitutions, payee string,
 	existingPayees *PayeeSet) {
-	payees := fuzzySelect(existingPayees.ToSlice(), payee, strings.ToLower(payee))
-	if len(payees) > 0 {
-		replacement := payees[0]
+	replacement := ""
+	// payees is like []string{"user entered query", "result 1", "result 2", …}
+	payees := fuzzySelect(existingPayees.ToSlice(), payee, strings.ToLower(payee), true)
+	// If there were one or more result, we want to keep the first one, since
+	// we can’t have multiple payees for a transaction
+	if len(payees) > 1 {
+		replacement = payees[1]
+	} else {
+		// Since fuzzySelect insert the query as first element, the slice
+		// always has at least one element
+		replacement = payees[0]
+		fmt.Println("Nothing selected, remplacement:", replacement)
+	}
+	// We let the existing payee if there is nothing better to replace with
+	if replacement != "" {
+		fmt.Println("Replacing with:", replacement)
 		subst[payee] = replacement
 		txn.Desc = replacement
 	} else {
-		fmt.Println("Nothing selected")
+		fmt.Println("Not replaced")
+		fmt.Printf("%#v", payees)
 	}
 }
