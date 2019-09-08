@@ -56,7 +56,7 @@ func TestLedgerFormat(t *testing.T) {
 			t.Errorf("Error while parsing template, %v\n", err)
 			panic(err)
 		}
-		want := "2013/02/03 * Payee\n    Assets:Checking           123 456 789,03 USD\n    Expenses:Food    123|456|789,030\n\n"
+		want := "2013/02/03 * Payee\n    Assets:Checking           123456789,03 USD\n    Expenses:Food    123|456|789,030\n\n"
 		got := ledgerFormat(txn, tmpl)
 		if got != want {
 			t.Errorf("The result is not expected (template not completely interpreted?), got `%s`, want `%s`\n", got, want)

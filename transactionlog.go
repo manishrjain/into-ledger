@@ -13,7 +13,7 @@ import (
 var funcMap = map[string]interface{}{
 	"humanFloat": humanize.FormatFloat,
 	"commaFloat": func(f float64) string {
-		return humanize.FormatFloat("# ###,##", f)
+		return humanize.FormatFloat("###,##", f)
 	},
 	"uuid": func() (string, error) {
 		u4, err := uuid.NewV4()

@@ -15,7 +15,9 @@ type Payee = string
 
 // TODO Make this asynchronous
 func listPayee() PayeeSet {
-	payees := runCommand("ledger", "-f", *journal, "payees")
+	ledgerAccountCmd := []string{"ledger", "-f", *journal, "payees"}
+	fmt.Printf("Getting account list with: `%v`", ledgerAccountCmd)
+	payees := runCommand(ledgerAccountCmd[0], ledgerAccountCmd[1:]...)
 	return NewPayeeSet(payees...)
 }
 

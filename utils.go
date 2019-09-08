@@ -43,6 +43,10 @@ func oerr(msg string) {
 /// runCommand excute the given cmd and return the list of lines outputed on
 /// stdout
 func runCommand(name string, arg ...string) []string {
+
+	// XXX
+	fmt.Println(append([]string{"CMD: ", name}, arg...))
+
 	cmd := exec.Command(name, arg...)
 	out, err := cmd.Output()
 	checkf(err, "Error running `%v`: `%v`", name, arg)
