@@ -47,27 +47,29 @@ TxnLoop:
 	for i := range txns {
 		txn := &txns[i]
 		payee := txn.Desc
-		if !existingPayees.Contains(payee) {
-			if replacement, has := subst[payee]; has {
-				txn.Desc = replacement
-			} else {
-				answer := "f"
-				if !fuzzyContinous {
-					answer = askPayeeQuestion(fmt.Sprintf("Unknown payee: '%v' ([F]uzzy select/Fuzzy select [a]ll/[i]gnore/ig[n]ore all): ", payee), "fain", "f")
-				}
-				switch answer {
-				case "n":
-					break TxnLoop
+		if existingPayees.Contains(payee) {
+			continue
+		}
 
-				case "i":
-					continue TxnLoop
+		if replacement, has := subst[payee]; has {
+			txn.Desc = replacement
+		} else {
+			answer := "f"
+			if !fuzzyContinous {
+				answer = askPayeeQuestion(fmt.Sprintf("Unknown payee: '%v' ([F]uzzy select/Fuzzy select [a]ll/[i]gnore/ig[n]ore all): ", payee), "fain", "f")
+			}
+			switch answer {
+			case "n":
+				break TxnLoop
 
-				case "a":
-					fuzzyContinous = true
-					fallthrough
-				case "f":
-					fuzzySelectUpdateTxn(txn, subst, payee, existingPayees)
-				}
+			case "i":
+				continue TxnLoop
+
+			case "a":
+				fuzzyContinous = true
+				fallthrough
+			case "f":
+				fuzzySelectUpdateTxn(txn, subst, payee, existingPayees)
 			}
 		}
 	}
