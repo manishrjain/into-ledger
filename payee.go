@@ -53,24 +53,42 @@ TxnLoop:
 			} else {
 				answer := "f"
 				if !fuzzyContinous {
-					fmt.Printf("Unknown payee: '%v' ([F]uzzy select/Fuzzy select [a]ll/[i]gnore/ig[n]ore all): ", payee)
-					b := make([]byte, 1)
-					_, _ = os.Stdin.Read(b)
-					fmt.Println()
-					answer = strings.ToLower(string(b))
-				}
-				if answer == "a" {
-					fuzzyContinous = true
-					answer = "f"
+					answer = askPayeeQuestion(fmt.Sprintf("Unknown payee: '%v' ([F]uzzy select/Fuzzy select [a]ll/[i]gnore/ig[n]ore all): ", payee), "fain", "f")
 				}
 				switch answer {
 				case "n":
 					break TxnLoop
+
 				case "i":
 					continue TxnLoop
-				default:
+
+				case "a":
+					fuzzyContinous = true
+					fallthrough
+				case "f":
 					fuzzySelectUpdateTxn(txn, subst, payee, existingPayees)
 				}
+			}
+		}
+	}
+}
+
+// askPayeeQuestion prompts user with question and loops while it doesn’t
+// get an answer in choices. Empty string or line-return goes to defaultChoice
+func askPayeeQuestion(question string, choices string, defaultChoice string) string {
+	var answer string
+	for {
+		fmt.Print(question)
+		b := make([]byte, 1)
+		_, _ = os.Stdin.Read(b)
+		fmt.Println()
+		answer = strings.ToLower(string(b))
+		if answer == "" || answer == "\n" {
+			return defaultChoice
+		}
+		for _, c := range choices {
+			if string(c) == answer {
+				return answer
 			}
 		}
 	}
