@@ -49,22 +49,36 @@ func runCommand(name string, arg ...string) []string {
 	return strings.Split(string(out), "\n")
 }
 
-/// FuzzySelect prompts the user to select one or more items in a fuzzy menu.
-/// If prompt is set "", a default prompt is used. Query is used to fill the
-/// search field. The returnQuery returns what the user searched for
-func fuzzySelect(items []string, prompt string, query string, returnQuery bool) (selected []string) {
+// Parameters for Fzf
+type Fzf struct {
+	// Items to be selected by user
+	Items []string
+	// If prompt is set "", a default prompt is used.
+	Prompt string
+	//  Used to fill the search field
+	Query string
+	// Returns what the user searched for
+	ReturnQuery bool
+	// More arguments to the fzf command
+	MoreArgs []string
+}
+
+// FuzzySelect prompts the user to select one or more items in a fuzzy menu.
+func fuzzySelect(f Fzf) (selected []string) {
 	// TODO Find a more idiomatic way
 	args := []string{}
-	if prompt != "" {
-		args = append(args, "--prompt", prompt+" >")
+	if f.Prompt != "" {
+		args = append(args, "--prompt", f.Prompt+" >")
 	}
-	if returnQuery {
+	if f.ReturnQuery {
 		// Print what the user entered first-line
 		args = append(args, "--print-query")
 	}
-	args = append(args, "--query", query)
-	// Other options
+	args = append(args, "--query", f.Query)
+	// Default options
 	args = append(args, "--height", "80%")
+	// Other options
+	args = append(args, f.MoreArgs...)
 	// Inspired from https://stackoverflow.com/a/23167416/ by mraron (Apache
 	// 2.0 licence)
 	subProcess := exec.Command("fzf", args...)
@@ -79,7 +93,7 @@ func fuzzySelect(items []string, prompt string, query string, returnQuery bool) 
 	subProcess.Stderr = os.Stderr
 	err = subProcess.Start()
 	checkf(err, "Error running fzf. Is https://github.com/junegunn/fzf installed?")
-	io.WriteString(stdin, strings.Join(items, "\n"))
+	io.WriteString(stdin, strings.Join(f.Items, "\n"))
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(stdout)
 	s := buf.String()
@@ -87,7 +101,7 @@ func fuzzySelect(items []string, prompt string, query string, returnQuery bool) 
 	for i, s := range strings.Split(s, "\n") {
 		switch {
 		// Always keep user query even if it is empty
-		case returnQuery && i == 0:
+		case f.ReturnQuery && i == 0:
 			selected = append(selected, s)
 		case s != "":
 			selected = append(selected, s)

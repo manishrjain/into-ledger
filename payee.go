@@ -100,7 +100,12 @@ func fuzzySelectUpdateTxn(txn *Txn, subst PayeeSubstitutions, payee string,
 	existingPayees *PayeeSet) {
 	replacement := ""
 	// payees is like []string{"user entered query", "result 1", "result 2", …}
-	payees := fuzzySelect(existingPayees.ToSlice(), payee, strings.ToLower(payee), true)
+	payees := fuzzySelect(Fzf{
+		Items:       existingPayees.ToSlice(),
+		Prompt:      payee,
+		Query:       strings.ToLower(payee),
+		ReturnQuery: true,
+	})
 	// If there were one or more result, we want to keep the first one, since
 	// we can’t have multiple payees for a transaction
 	if len(payees) > 1 {
