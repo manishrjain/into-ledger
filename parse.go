@@ -69,7 +69,7 @@ func (p *parser) parseTransactions() {
 		checkf(err, "Unable to parse amount.")
 		p.txns = append(p.txns, t)
 
-		assignForAccount(t.To)
+		existingAccounts.Add(t.To)
 	}
 }
 
@@ -85,8 +85,9 @@ func (p *parser) parseAccounts() {
 		if len(acc) == 0 {
 			continue
 		}
+		// TODO p.accounts could be replaced by existingAccount perhaps?
 		p.accounts = append(p.accounts, acc)
-		assignForAccount(acc)
+		existingAccounts.Add(acc)
 	}
 }
 

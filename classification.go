@@ -46,7 +46,7 @@ func (p *parser) categorizeTxn(t *Txn, idx, total int) float64 {
 
 	clear()
 	printSummary(*t, idx, total)
-	return p.printAndGetResult(*short, t)
+	return p.fuzzyAndGetResult(&existingAccounts, t)
 }
 
 func (p *parser) classifyTxn(t *Txn) {
@@ -58,6 +58,26 @@ func (p *parser) classifyTxn(t *Txn) {
 			t.From = string(hits[0])
 		}
 	}
+}
+
+// Assign account to transaction, smartly according to the sign of the amount
+func assignAccount(t *Txn, accountName string) {
+	if t.Cur > 0 {
+		t.From = accountName
+	} else {
+		t.To = accountName
+	}
+}
+
+func (p *parser) fuzzyAndGetResult(existingAccounts *AccountSet, t *Txn) float64 {
+	accountName := fuzzySelectAccount(t, existingAccounts)
+	assignAccount(t, accountName)
+	if len(t.To) > 0 && len(t.From) > 0 {
+		p.writeToDB(*t)
+		t.Done = true
+		return 1.0
+	}
+	return 0
 }
 
 func (p *parser) printAndGetResult(ks keys.Shortcuts, t *Txn) float64 {
@@ -99,11 +119,7 @@ LOOP:
 		}
 
 		category = append(category, opt)
-		if t.Cur > 0 {
-			t.From = strings.Join(category, ":")
-		} else {
-			t.To = strings.Join(category, ":")
-		}
+		assignAccount(t, strings.Join(category, ":"))
 		label = opt
 		if ks.HasLabel(label) {
 			repeat = true

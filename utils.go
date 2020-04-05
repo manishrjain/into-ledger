@@ -63,6 +63,8 @@ func fuzzySelect(items []string, prompt string, query string, returnQuery bool) 
 		args = append(args, "--print-query")
 	}
 	args = append(args, "--query", query)
+	// Other options
+	args = append(args, "--height", "80%")
 	// Inspired from https://stackoverflow.com/a/23167416/ by mraron (Apache
 	// 2.0 licence)
 	subProcess := exec.Command("fzf", args...)

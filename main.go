@@ -68,14 +68,14 @@ var (
 	racc   = regexp.MustCompile(`^account[\W]+(.*)`)
 	ralias = regexp.MustCompile(`\balias\s(.*)`)
 
-	stamp          = "2006/01/02"
-	bucketName     = []byte("txns")
-	descLength     = 40
-	catLength      = 20
-	existingPayees = NewPayeeSet() // Payee existing in the journal before running this command
-	payeeSubsts    = make(PayeeSubstitutions)
-	short          *keys.Shortcuts
-	txnTemplate    *template.Template
+	stamp            = "2006/01/02"
+	bucketName       = []byte("txns")
+	descLength       = 40
+	catLength        = 20
+	existingPayees   = NewPayeeSet()   // Payee existing in the journal before running this command
+	existingAccounts = NewAccountSet() // Account existing in the journal before running this command
+	payeeSubsts      = make(PayeeSubstitutions)
+	txnTemplate      *template.Template
 )
 
 type configs struct {
@@ -113,20 +113,6 @@ type byTime []Txn
 func (b byTime) Len() int               { return len(b) }
 func (b byTime) Less(i int, j int) bool { return b[i].Date.Before(b[j].Date) }
 func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
-
-func assignForAccount(account string) {
-	tree := strings.Split(account, ":")
-	assertf(len(tree) > 0, "Expected at least one result. Found none for: %v", account)
-	short.AutoAssign(tree[0], "default")
-	prev := tree[0]
-	for _, c := range tree[1:] {
-		if len(c) == 0 {
-			continue
-		}
-		short.AutoAssign(c, prev)
-		prev = c
-	}
-}
 
 type pair struct {
 	score float64
@@ -336,10 +322,6 @@ func main() {
 	} else if *debug {
 		fmt.Printf("No config file found at %v\n", configPath)
 	}
-	keyfile := path.Join(*configDir, *shortcuts)
-	short = keys.ParseConfig(keyfile)
-	setDefaultMappings(short)
-	defer short.Persist(keyfile)
 	payeeSubstitutionsPath := path.Join(*configDir, *payeeSubstitutionsFile)
 	data, err = ioutil.ReadFile(payeeSubstitutionsPath)
 	if err == nil {
