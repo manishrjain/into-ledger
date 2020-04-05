@@ -75,8 +75,8 @@ func fuzzySelect(f Fzf) (selected []string) {
 		args = append(args, "--print-query")
 	}
 	args = append(args, "--query", f.Query)
-	// Default options
-	args = append(args, "--height", "80%")
+	// Default options, TODO Make this configurable
+	args = append(args, "--height", "80%", "--layout=reverse")
 	// Other options
 	args = append(args, f.MoreArgs...)
 	// Inspired from https://stackoverflow.com/a/23167416/ by mraron (Apache
