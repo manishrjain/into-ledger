@@ -36,7 +36,6 @@ func (p *parser) parseTransactions() {
 	out, err := exec.Command(csvCommand[0], (csvCommand[1:])...).Output()
 	checkf(err, "Unable to convert journal to csv. Possibly an issue with your ledger installation.")
 	r := csv.NewReader(newConverter(bytes.NewReader(out)))
-	r.Comma = []rune(*comma)[0]
 	var t Txn
 	for {
 		cols, err := r.Read()
@@ -172,6 +171,7 @@ func parseTransactionsFromCSV(in []byte) []Txn {
 
 	result := make([]Txn, 0, 100)
 	r := csv.NewReader(bytes.NewReader(in))
+	r.Comma = []rune(*comma)[0]
 	var t Txn
 	var skipped int
 	for {
@@ -188,7 +188,7 @@ func parseTransactionsFromCSV(in []byte) []Txn {
 			log.Println("Warning: Empty line dropped")
 			continue
 		}
-		checkf(err, "Unable to read line: %v", strings.Join(cols, ", "))
+		checkf(err, "Unable to read line: %v\ncolumns: %v", strings.Join(cols, ", "), cols)
 		if *skip > skipped {
 			skipped++
 			continue
@@ -218,7 +218,7 @@ func parseTransactionsFromCSV(in []byte) []Txn {
 		} else {
 			fmt.Println()
 			fmt.Printf("ERROR           : Unable to parse transaction from the selected columns in CSV.\n")
-			fmt.Printf("Selected CSV    : %v\n", strings.Join(picked, ", "))
+			fmt.Printf("Selected CSV    : %#v\n", picked)
 			fmt.Printf("Parsed Date     : %v\n", t.Date)
 			fmt.Printf("Parsed Desc     : %v\n", t.Desc)
 			fmt.Printf("Parsed Currency : %v\n", t.Cur)
