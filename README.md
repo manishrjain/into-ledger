@@ -14,14 +14,15 @@ Features:
 - *Nice UI*              : Colors and formatting, because it's not just about getting things done. It's also about making them look nice!
 
 This fork adds:
-- *Proper manual*: TODO
-- *Support of payee aliases*: file with internal aliases (TODO)
-- *Improved code quality*: from to (TODO insert shields)
+- **Fixes**: various improvement, in particular to the CSV parsing
+- **Fuzzy selection**: with fzf
+- **Proper manual**: *in proress*
+- **Support of payee aliases**: file with internal aliases *TODO*
 
 Install
 -------
 
-`go get -v -u github.com/cj-rs/into-ledger`
+`go get -v -u joly.pw/into-ledger`
 
 
 Help
