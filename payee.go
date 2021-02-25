@@ -44,7 +44,7 @@ func (ps *PayeeSubstitutions) Persist(path string) {
 // without existing substitution
 func performPayeeSubstitution(txns []Txn, subst PayeeSubstitutions,
 	existingPayees *PayeeSet) {
-	// Continously select with fuzzy menu, without asking
+	// Continuously select with fuzzy menu, without asking
 	fuzzyContinous := false
 TxnLoop:
 	for i := range txns {

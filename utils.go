@@ -40,7 +40,7 @@ func oerr(msg string) {
 	fmt.Println()
 }
 
-// runCommand excute the given cmd and return the list of lines outputed on
+// runCommand excute the given cmd and return the list of lines outputted on
 // stdout
 func runCommand(name string, arg ...string) []string {
 	cmd := exec.Command(name, arg...)
