@@ -179,6 +179,10 @@ func parseTransactionsFromCSV(in []byte) []Txn {
 		// Have a unique key for each transaction in CSV, so we can unique identify and
 		// persist them as we modify their category.
 		_, err := rand.Read(t.Key)
+		if err != nil {
+			fmt.Println("Warning: rand.Read error:", err)
+			break
+		}
 		cols, err := r.Read()
 		if err == io.EOF {
 			break
