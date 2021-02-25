@@ -1,7 +1,11 @@
-into-ledger
+<div align="center">
+
+🔮 into-ledger
 -----------
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/leowzukw/into-ledger)](https://goreportcard.com/report/github.com/leowzukw/into-ledger)
+
+</div>
 
 into-ledger helps categorization of CSV transactions and conversion into ledger format for consumption by [ledger-cli.org](http://ledger-cli.org/). It makes importing hundreds of transactions into ledger a breeze. I typically get close to a hundred transactions per account per month myself, which is why I wrote this tool.
 
