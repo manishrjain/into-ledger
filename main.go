@@ -48,13 +48,6 @@ var (
 	shortcuts              = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
 	payeeSubstitutionsFile = flag.String("payeesubst", "payee_subst.yaml", "Name of payee substitutions file.")
 
-	pstart = time.Now().Add(-90 * 24 * time.Hour).Format(plaidDate)
-	pend   = time.Now().Format(plaidDate)
-
-	// The following flags are for using Plaid.com integration to auto-fetch txns.
-	usePlaid = flag.Bool("p", false, "Use Plaid to auto-fetch txns."+
-		" You must have set plaid.yaml in conf dir.")
-
 	dupWithin = flag.Int("within", 24, "Consider txns to be dups, if their dates are not"+
 		" more than N hours apart. Description and amount must also match exactly for"+
 		" a txn to be considered duplicate.")
@@ -277,11 +270,6 @@ func clear() {
 func main() {
 	flag.Parse()
 
-	if *plaidHist != "" {
-		fmt.Printf("Balance history error: %v\n", BalanceHistory(*account))
-		return
-	}
-
 	defer saneMode()
 	singleCharMode()
 
@@ -378,18 +366,13 @@ func main() {
 
 	var txns []Txn
 	switch {
-	case *usePlaid:
-		var err error
-		txns, err = GetPlaidTransactions(*account)
-		checkf(err, "Couldn't get plaid txns")
-
 	case len(*csvFile) > 0:
 		in, err := ioutil.ReadFile(*csvFile)
 		checkf(err, "Unable to read csv file: %v", *csvFile)
 		txns = parseTransactionsFromCSV(in)
 
 	default:
-		assertf(false, "Please specify either a CSV flag or a Plaid flag")
+		assertf(false, "Please specify a CSV flag")
 	}
 
 	for i := range txns {
