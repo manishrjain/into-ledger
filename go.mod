@@ -10,5 +10,6 @@ require (
 	github.com/manishrjain/keys v0.0.0-20161209110039-33acb6c87e35
 	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d
 	github.com/pkg/errors v0.9.1
+	github.com/stretchr/testify v1.7.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0
 )
