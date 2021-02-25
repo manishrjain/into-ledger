@@ -16,7 +16,7 @@ Features:
 This fork adds:
 - **Fixes**: various improvement, in particular to the CSV parsing
 - **Fuzzy selection**: with fzf
-- **Proper manual**: *in proress*
+- **Proper manual**: *in progress*
 - **Support of payee aliases**: file with internal aliases *TODO*
 
 Install
