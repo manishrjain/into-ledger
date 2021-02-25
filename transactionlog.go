@@ -9,7 +9,7 @@ import (
 	uuid "github.com/nu7hatch/gouuid"
 )
 
-/// Functions to expand capabilities of transaction templates
+// Functions to expand capabilities of transaction templates
 var funcMap = map[string]interface{}{
 	"humanFloat": humanize.FormatFloat,
 	"commaFloat": func(f float64) string {
@@ -21,7 +21,7 @@ var funcMap = map[string]interface{}{
 	},
 }
 
-/// Transaction structure for templating
+// TxnTemplate holds values used in transaction templating
 type TxnTemplate struct {
 	Date     time.Time
 	Payee    string
@@ -46,8 +46,8 @@ func newTransactionTemplate(txnTemplateString string) (*template.Template, error
 	return template.New("transaction").Funcs(funcMap).Parse(txnTemplateString)
 }
 
-/// ledgerFormat formats a string for insertion into a ledger journal, using
-/// provided template.
+// ledgerFormat formats a string for insertion into a ledger journal, using
+// provided template.
 func ledgerFormat(t Txn, tmpl *template.Template) string {
 	var b strings.Builder
 	tmpl.Execute(&b, toTxnTemplate(t))

@@ -25,7 +25,7 @@ import (
 
 const defaultTxnTemplateString = "{{.Date.Format \"2006/01/02\"}}\t{{.Payee}}\n\t{{.To | printf \"%-20s\"}}\t{{.Amount | printf `%.2f`}}{{.Currency}}\n\t{{.From}}\n\n"
 
-/// Name for a pseudo-account holding common configuration to all accounts
+// Name for a pseudo-account holding common configuration to all accounts
 const commonAccount = "_"
 
 var (
@@ -75,26 +75,27 @@ type configs struct {
 	Accounts map[string]map[string]string // account and the corresponding config.
 }
 
+// Txn is a transaction
 type Txn struct {
-	/// Date of the transaction
+	// Date of the transaction
 	Date time.Time
 
-	/// Payee, extracted from the description of the CSV file most of the time
+	// Payee, extracted from the description of the CSV file most of the time
 	Desc string
 
-	/// Account to money is going into, like 'Expenses:…'
+	// Account to money is going into, like 'Expenses:…'
 	To string
 
-	/// Account the money is coming from, like 'Assets:…'
+	// Account the money is coming from, like 'Assets:…'
 	From string
 
-	/// Amount
+	// Amount
 	Cur float64
 
-	/// Currency, like 'USD'
+	// Currency, like 'USD'
 	CurName string
 
-	/// For internal use
+	// For internal use
 	Key []byte
 
 	skipClassification bool
@@ -286,7 +287,7 @@ func main() {
 		checkf(yaml.Unmarshal(data, &c), "Unable to unmarshal yaml config at %v", configPath)
 		if ac, has := c.Accounts[*account]; has {
 			fmt.Printf("Using flags from config: %+v\n", ac)
-			/// Merge common setting before using settings for this account
+			// Merge common setting before using settings for this account
 			if defaultAc, has := c.Accounts[commonAccount]; has {
 				if *debug {
 					fmt.Println("Setting common flags")

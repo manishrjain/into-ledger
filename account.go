@@ -1,5 +1,6 @@
 package main
 
+// An Account as defined in ledger (ledger-cli.org)
 // +gen set
 type Account = string
 

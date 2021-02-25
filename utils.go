@@ -40,8 +40,8 @@ func oerr(msg string) {
 	fmt.Println()
 }
 
-/// runCommand excute the given cmd and return the list of lines outputed on
-/// stdout
+// runCommand excute the given cmd and return the list of lines outputed on
+// stdout
 func runCommand(name string, arg ...string) []string {
 	cmd := exec.Command(name, arg...)
 	out, err := cmd.Output()
@@ -49,7 +49,7 @@ func runCommand(name string, arg ...string) []string {
 	return strings.Split(string(out), "\n")
 }
 
-// Parameters for Fzf
+// Fzf holds parameters for github.com/junegunn/fzf
 type Fzf struct {
 	// Items to be selected by user
 	Items []string

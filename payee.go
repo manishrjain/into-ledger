@@ -10,6 +10,7 @@ import (
 	yaml "gopkg.in/yaml.v2"
 )
 
+// A Payee as defined in ledger (ledger-cli.org)
 // +gen set
 type Payee = string
 
@@ -21,9 +22,11 @@ func listPayee() PayeeSet {
 	return NewPayeeSet(payees...)
 }
 
-/// Substitution from key to value of payee name
+// PayeeSubstitutions holds all the replacement from source payee (the key in
+// the map) to the desired payee name (the value in the map)
 type PayeeSubstitutions map[string]string
 
+// Persist saves the payee substitutions to a yaml file
 func (ps *PayeeSubstitutions) Persist(path string) {
 	data, err := yaml.Marshal(*ps)
 	if err != nil {
