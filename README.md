@@ -9,13 +9,15 @@
 
 into-ledger helps categorization of CSV transactions and conversion into ledger format for consumption by [ledger-cli.org](http://ledger-cli.org/). It makes importing hundreds of transactions into ledger a breeze. I typically get close to a hundred transactions per account per month myself, which is why I wrote this tool.
 
-Features:
-- *Accurate*             : Uses a much more accurate tf-idf expense classifier than used by cantino/reckon.
-- *Includes and Aliases* : Correctly parses your existing journal file, handling all includes and account aliases.
-- *Keyboard Shortcuts*   : Assigns dynamic keyboard shortcuts, so classifying transactions is just a keystroke away.
-- *Auto save*            : Uses temporary storage (boltdb) to persist transactions that you have categorized or acknowledged to be correctly categorized, so you can quit whenever you want, without the risk of losing the work done so far.
-- *Deduplication*        : Deduplicates incoming transactions from CSV against the transactions already present in ledger journal. This allows an easy resume from a broken workflow.
-- *Nice UI*              : Colors and formatting, because it's not just about getting things done. It's also about making them look nice!
+Features
+------
+
+- **Accurate**             : Uses a much more accurate tf-idf expense classifier than used by cantino/reckon.
+- **Includes and Aliases** : Correctly parses your existing journal file, handling all includes and account aliases.
+- **Keyboard Shortcuts**   : Assigns dynamic keyboard shortcuts, so classifying transactions is just a keystroke away.
+- **Auto save**            : Uses temporary storage (boltdb) to persist transactions that you have categorized or acknowledged to be correctly categorized, so you can quit whenever you want, without the risk of losing the work done so far.
+- **Deduplication**        : Deduplicates incoming transactions from CSV against the transactions already present in ledger journal. This allows an easy resume from a broken workflow.
+- **Nice UI**              : Colors and formatting, because it's not just about getting things done. It's also about making them look nice!
 
 This fork adds:
 - **Fixes**: various improvement, in particular to the CSV parsing
