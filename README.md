@@ -23,7 +23,9 @@ This fork adds:
 - **More documentation**: admittedly still in progress
 - **More modern, cleaner codebase**: this fork [![Go Report Card](https://goreportcard.com/badge/github.com/leowzukw/into-ledger)](https://goreportcard.com/report/github.com/leowzukw/into-ledger) vs upstream  [![Go Report Card](https://goreportcard.com/badge/github.com/manishrjain/into-ledger)](https://goreportcard.com/report/github.com/manishrjain/into-ledger)
 - **Support of payee aliases**: file with internal aliases *TODO*
-and this fork removes:
+
+
+This fork removes:
 - **Plaid support**: with better CSV parsing, the tool is more generic and can use data from many more websites
 
 Install
