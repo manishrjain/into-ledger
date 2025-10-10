@@ -38,6 +38,7 @@ var (
 	account    = flag.String("a", "", "Name of bank account transactions belong to.")
 	currency   = flag.String("c", "", "Set currency if any.")
 	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
+	selectCols = flag.String("sc", "", "Comma separated list of columns to select from CSV (e.g., '0,1,5' for columns 0, 1, and 5).")
 	dateFormat = flag.String("d", "01/02/2006",
 		"Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
 	skip      = flag.Int("s", 0, "Number of header lines in CSV to skip")
@@ -261,7 +262,11 @@ func (p *parser) topHits(in string) []bayesian.Class {
 	sort.Sort(byScore(pairs))
 	result := make([]bayesian.Class, 0, 5)
 	last := pairs[0].score
-	for i := 0; i < 5; i++ {
+	maxResults := len(pairs)
+	if maxResults > 5 {
+		maxResults = 5
+	}
+	for i := 0; i < maxResults; i++ {
 		pr := pairs[i]
 		if *debug {
 			fmt.Printf("i=%d s=%f Class=%v\n", i, pr.score, p.classes[pr.pos])
@@ -317,17 +322,50 @@ func parseDescription(col string) (string, bool) {
 }
 
 func parseTransactionsFromCSV(in []byte) []Txn {
-	ignored := make(map[int]bool)
-	if len(*ignore) > 0 {
-		for _, i := range strings.Split(*ignore, ",") {
-			pos, err := strconv.Atoi(i)
+	// Read first line to determine total number of columns
+	r := csv.NewReader(bytes.NewReader(in))
+	firstLine, err := r.Read()
+	checkf(err, "Unable to read first line of CSV")
+	totalCols := len(firstLine)
+	
+	// Reset reader
+	r = csv.NewReader(bytes.NewReader(in))
+	
+	// Build column filter: true = include column, false = exclude column
+	columnFilter := make(map[int]bool)
+	
+	if len(*selectCols) > 0 {
+		// Select mode: reject everything, then select specified columns
+		for i := 0; i < totalCols; i++ {
+			columnFilter[i] = false
+		}
+		for _, i := range strings.Split(*selectCols, ",") {
+			pos, err := strconv.Atoi(strings.TrimSpace(i))
 			checkf(err, "Unable to convert to integer: %v", i)
-			ignored[pos] = true
+			if pos < totalCols {
+				columnFilter[pos] = true
+			}
+		}
+	} else if len(*ignore) > 0 {
+		// Ignore mode: select everything, then reject specified columns
+		for i := 0; i < totalCols; i++ {
+			columnFilter[i] = true
+		}
+		for _, i := range strings.Split(*ignore, ",") {
+			pos, err := strconv.Atoi(strings.TrimSpace(i))
+			checkf(err, "Unable to convert to integer: %v", i)
+			if pos < totalCols {
+				columnFilter[pos] = false
+			}
+		}
+	} else {
+		// No filtering: select all columns
+		for i := 0; i < totalCols; i++ {
+			columnFilter[i] = true
 		}
 	}
 
 	result := make([]Txn, 0, 100)
-	r := csv.NewReader(bytes.NewReader(in))
 	var t Txn
 	var skipped int
 	for {
@@ -347,9 +385,11 @@ func parseTransactionsFromCSV(in []byte) []Txn {
 
 		var picked []string
 		for i, col := range cols {
-			if ignored[i] {
+			// Skip column if it's not selected in the filter
+			if !columnFilter[i] {
 				continue
 			}
+			
 			picked = append(picked, col)
 			if date, ok := parseDate(col); ok {
 				t.Date = date
@@ -852,8 +892,129 @@ func oerr(msg string) {
 	fmt.Println()
 }
 
+func validateJournalSetup(journalPath string, data []byte) error {
+	// Check if journal file exists
+	if _, err := os.Stat(journalPath); os.IsNotExist(err) {
+		// Create directory if it doesn't exist
+		if err := os.MkdirAll(path.Dir(journalPath), 0755); err != nil {
+			return fmt.Errorf("unable to create directory for journal file: %v", err)
+		}
+		return fmt.Errorf("journal file does not exist")
+	}
+	
+	// Try to run ledger csv command to see if the journal is valid
+	cmd := exec.Command("ledger", "-f", journalPath, "csv")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("journal file is not valid or has no transactions: %v", err)
+	}
+	
+	// Check if there are any transactions with categories
+	if len(output) == 0 {
+		return fmt.Errorf("journal file contains no transactions with categories")
+	}
+	
+	// If data is provided, check if the journal has account declarations for basic categories
+	if data != nil {
+		dataStr := string(data)
+		hasExpenses := strings.Contains(dataStr, "account Expenses")
+		hasAssets := strings.Contains(dataStr, "account Assets")
+		hasIncome := strings.Contains(dataStr, "account Income")
+		
+		if !hasExpenses && !hasAssets && !hasIncome {
+			return fmt.Errorf("journal file lacks basic account categories (Assets, Income, Expenses)")
+		}
+	}
+	
+	return nil
+}
+
+func askUserToSetupJournal() bool {
+	fmt.Println()
+	fmt.Println("Your journal file appears to be empty or lacks basic account categories.")
+	fmt.Println("Would you like me to create basic account categories in your journal? (Y/n)")
+	fmt.Print("This will add common accounts like Assets, Income, and Expenses: ")
+	
+	var response string
+	fmt.Scanln(&response)
+	response = strings.ToLower(strings.TrimSpace(response))
+	
+	return response == "" || response == "y" || response == "yes"
+}
+
+func createBasicJournalSetup(journalPath string) error {
+	basicSetup := `; Basic account declarations for into-ledger
+; Created automatically - you can modify these as needed
+
+account Assets:Checking
+account Assets:Savings
+account Assets:Cash
+
+account Income:Salary
+account Income:Interest
+account Income:Other
+
+; Broadly speaking, we'll narrow it down to 5 expense categories.
+;
+; Home   : Rent, Utils, Internet, Moves, Furniture, Phone.
+; Food   : Grocery, Restaurant.
+; Kids   : Education, After School.
+; Travel : Car, Flight, Museums, Lyft/Uber, Cinema.
+; Wants  : Cash, Gifts, Shopping, Upkeep, Gym, Online.
+; Others : Fee, Medical, Docs, Mail, Donations.
+
+account Expenses:Home
+account Expenses:Food
+account Expenses:Kids
+account Expenses:Travel
+account Expenses:Wants
+account Expenses:Others
+account Expenses:Small
+
+account Liabilities:Credit
+
+; Example transactions - you can remove these
+2024/01/01 * Sample grocery purchase
+    Expenses:Food               $25.00
+    Assets:Checking
+
+2024/01/02 * Sample gas purchase  
+    Expenses:Travel             $40.00
+    Assets:Checking
+
+`
+	
+	// Check if file exists and has content
+	data, err := ioutil.ReadFile(journalPath)
+	if err != nil {
+		// File doesn't exist, create it with basic setup
+		return ioutil.WriteFile(journalPath, []byte(basicSetup), 0644)
+	}
+	
+	// If file is empty or very small, write the basic setup
+	if len(data) < 10 {
+		return ioutil.WriteFile(journalPath, []byte(basicSetup), 0644)
+	}
+	
+	// If file has content, append the basic accounts
+	file, err := os.OpenFile(journalPath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	
+	_, err = file.WriteString("\n" + basicSetup)
+	return err
+}
+
 func main() {
 	flag.Parse()
+
+	// Check if ledger is installed and available
+	if _, err := exec.LookPath("ledger"); err != nil {
+		oerr("ledger is not installed or not in PATH. Please install ledger from https://ledger-cli.org/")
+		return
+	}
 
 	if *plaidHist != "" {
 		fmt.Printf("Balance history error: %v\n", BalanceHistory(*account))
@@ -890,6 +1051,19 @@ func main() {
 		oerr("Please specify the input ledger journal file")
 		return
 	}
+
+	// Check if journal file has proper setup with categories
+	if err := validateJournalSetup(*journal, nil); err != nil {
+		fmt.Printf("Journal setup issue: %v\n", err)
+		if askUserToSetupJournal() {
+			if err := createBasicJournalSetup(*journal); err != nil {
+				checkf(err, "Unable to create basic journal setup")
+			}
+		} else {
+			return
+		}
+	}
+
 	data, err = ioutil.ReadFile(*journal)
 	checkf(err, "Unable to read file: %v", *journal)
 	alldata := includeAll(path.Dir(*journal), data)
