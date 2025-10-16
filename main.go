@@ -35,7 +35,7 @@ var (
 	journal    = flag.String("j", "", "Existing journal to learn from.")
 	output     = flag.String("o", "out.ldg", "Journal file to write to.")
 	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
-	account    = flag.String("a", "", "Name of bank account transactions belong to.")
+	account    = flag.String("a", "", "Account name (e.g., 'Assets:Checking') or CSV column index (e.g., '6') for account field. When using column index, add csv-account mappings in ledger file.")
 	currency   = flag.String("c", "", "Set currency if any.")
 	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
 	selectCols = flag.String("sc", "", "Comma separated list of columns to select from CSV (e.g., '0,1,5' for columns 0, 1, and 5).")
@@ -91,6 +91,7 @@ type Txn struct {
 	Key                []byte
 	skipClassification bool
 	Done               bool
+	Account            string // Account from CSV (e.g., "Chase Bank - JAIN CHK (8987)")
 }
 
 type byTime []Txn
@@ -130,12 +131,13 @@ func assignForAccount(account string) {
 }
 
 type parser struct {
-	db       *bolt.DB
-	data     []byte
-	txns     []Txn
-	classes  []bayesian.Class
-	cl       *bayesian.Classifier
-	accounts []string
+	db             *bolt.DB
+	data           []byte
+	txns           []Txn
+	classes        []bayesian.Class
+	cl             *bayesian.Classifier
+	accounts       []string
+	accountMapping map[string]string // maps CSV account identifiers to ledger accounts
 }
 
 func (p *parser) parseTransactions() {
@@ -193,6 +195,69 @@ func (p *parser) parseAccounts() {
 		p.accounts = append(p.accounts, acc)
 		assignForAccount(acc)
 	}
+}
+
+// parseAccountMappings parses comments in the ledger file to find mappings
+// from CSV account identifiers to ledger accounts.
+// Expected format in ledger file:
+//   account Assets:Checking
+//     ; csv-account: CHK
+//     ; csv-account: checking
+func (p *parser) parseAccountMappings() {
+	p.accountMapping = make(map[string]string)
+	s := bufio.NewScanner(bytes.NewReader(p.data))
+	var currentAccount string
+	rcsvAccount := regexp.MustCompile(`;\s*csv-account:\s*(.+)`)
+
+	for s.Scan() {
+		line := s.Text()
+
+		// Check if this is an account declaration
+		m := racc.FindStringSubmatch(line)
+		if len(m) >= 2 && len(m[1]) > 0 {
+			currentAccount = m[1]
+			continue
+		}
+
+		// Check if this is a csv-account mapping comment
+		if currentAccount != "" {
+			m := rcsvAccount.FindStringSubmatch(line)
+			if len(m) >= 2 {
+				identifier := strings.TrimSpace(m[1])
+				if len(identifier) > 0 {
+					// Store mapping (case-insensitive)
+					p.accountMapping[strings.ToLower(identifier)] = currentAccount
+					if *debug {
+						fmt.Printf("[Account Mapping] '%s' -> %s\n", identifier, currentAccount)
+					}
+				}
+			}
+		}
+	}
+}
+
+// matchAccountToLedger matches a CSV account string to a ledger account
+// using the account mappings parsed from the ledger file.
+func (p *parser) matchAccountToLedger(csvAccount string) string {
+	if csvAccount == "" {
+		return ""
+	}
+
+	csvLower := strings.ToLower(csvAccount)
+
+	// Try exact match first
+	if ledgerAccount, ok := p.accountMapping[csvLower]; ok {
+		return ledgerAccount
+	}
+
+	// Try substring match - check if any mapping key is contained in the CSV account
+	for key, ledgerAccount := range p.accountMapping {
+		if strings.Contains(csvLower, key) {
+			return ledgerAccount
+		}
+	}
+
+	return ""
 }
 
 func (p *parser) generateClasses() {
@@ -321,13 +386,13 @@ func parseDescription(col string) (string, bool) {
 	}, col), true
 }
 
-func parseTransactionsFromCSV(in []byte) []Txn {
+func parseTransactionsFromCSV(in []byte, accountColIdx int) []Txn {
 	// Read first line to determine total number of columns
 	r := csv.NewReader(bytes.NewReader(in))
 	firstLine, err := r.Read()
 	checkf(err, "Unable to read first line of CSV")
 	totalCols := len(firstLine)
-	
+
 	// Reset reader
 	r = csv.NewReader(bytes.NewReader(in))
 	
@@ -385,11 +450,16 @@ func parseTransactionsFromCSV(in []byte) []Txn {
 
 		var picked []string
 		for i, col := range cols {
+			// Capture account column if specified
+			if accountColIdx >= 0 && i == accountColIdx {
+				t.Account = strings.TrimSpace(col)
+			}
+
 			// Skip column if it's not selected in the filter
 			if !columnFilter[i] {
 				continue
 			}
-			
+
 			picked = append(picked, col)
 			if date, ok := parseDate(col); ok {
 				t.Date = date
@@ -1025,9 +1095,20 @@ func main() {
 	singleCharMode()
 
 	checkf(os.MkdirAll(*configDir, 0755), "Unable to create directory: %v", *configDir)
-	if len(*account) == 0 {
-		oerr("Please specify the account transactions are coming from")
-		return
+
+	// Parse account flag: check if it's an integer (column index) or string (account name)
+	accountColIdx := -1
+	accountName := ""
+	if len(*account) > 0 {
+		if colIdx, err := strconv.Atoi(*account); err == nil {
+			// It's an integer - column index for CSV
+			accountColIdx = colIdx
+			fmt.Printf("Using CSV column %d for account information\n", accountColIdx)
+		} else {
+			// It's a string - account name
+			accountName = *account
+			fmt.Printf("Using account: %s\n", accountName)
+		}
 	}
 
 	configPath := path.Join(*configDir, "config.yaml")
@@ -1096,6 +1177,7 @@ func main() {
 
 	p := parser{data: alldata, db: db}
 	p.parseAccounts()
+	p.parseAccountMappings() // Parse account mappings from ledger comments
 	p.parseTransactions()
 
 	// Scanning done. Now train classifier.
@@ -1114,17 +1196,41 @@ func main() {
 	case len(*csvFile) > 0:
 		in, err := ioutil.ReadFile(*csvFile)
 		checkf(err, "Unable to read csv file: %v", *csvFile)
-		txns = parseTransactionsFromCSV(in)
+		txns = parseTransactionsFromCSV(in, accountColIdx)
 
 	default:
 		assertf(false, "Please specify either a CSV flag or a Plaid flag")
 	}
 
+	// Assign accounts to transactions
 	for i := range txns {
+		var ledgerAccount string
+
+		// If account column was specified and we have an account value from CSV
+		if accountColIdx >= 0 && len(txns[i].Account) > 0 {
+			// Try to match CSV account to ledger account
+			ledgerAccount = p.matchAccountToLedger(txns[i].Account)
+			if len(ledgerAccount) == 0 {
+				fmt.Printf("WARNING: Could not map CSV account '%s' to any ledger account. "+
+					"Consider adding csv-account mappings to your ledger file.\n", txns[i].Account)
+			}
+		} else if len(accountName) > 0 {
+			// Use the fixed account name from flag
+			ledgerAccount = accountName
+		}
+
+		// If we couldn't determine the account, require it to be specified
+		if len(ledgerAccount) == 0 {
+			oerr("Unable to determine account for transaction. Please specify account with -a flag " +
+				"(as account name or CSV column index with csv-account mappings in ledger file)")
+			return
+		}
+
+		// Assign the ledger account to the transaction
 		if txns[i].Cur > 0 {
-			txns[i].To = *account
+			txns[i].To = ledgerAccount
 		} else {
-			txns[i].From = *account
+			txns[i].From = ledgerAccount
 		}
 	}
 	if len(txns) > 0 {

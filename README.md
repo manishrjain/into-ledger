@@ -78,6 +78,54 @@ accounts:
 Now you can just run:
 `into-ledger -a chase -csv <input-csv>`, or `into-ledger -a cba-smart -csv <input-csv>`
 
+Account Mapping from CSV
+-------------------------
+
+If your CSV file contains an "Account" column (common in bank exports with multiple accounts), you can use `into-ledger` to automatically detect which account each transaction belongs to, instead of specifying a fixed account name.
+
+### How to Use
+
+The `-a` flag accepts either:
+- **Account name** (string): e.g., `-a "Assets:Checking"` (traditional usage)
+- **CSV column index** (integer): e.g., `-a 6` (new feature)
+
+When using a column index, you need to add `csv-account` mappings to your ledger file to map CSV account identifiers to ledger accounts.
+
+### Setting up Account Mappings
+
+In your ledger journal file, add special comments under each account declaration:
+
+```ledger
+account Assets:Checking
+  ; csv-account: CHK-1234
+  ; csv-account: Main Checking
+  ; csv-account: checking
+
+account Liabilities:CreditCard
+  ; csv-account: CC-5678
+  ; csv-account: Visa Card
+  ; csv-account: credit card
+
+account Assets:Savings
+  ; csv-account: SAV-9012
+  ; csv-account: High Yield Savings
+```
+
+The matching is **case-insensitive** and uses **substring matching**. For example, if your CSV contains `"Bank Name - Main Checking (CHK-1234)"`, it will match the `CHK-1234` identifier and map to `Assets:Checking`.
+
+### Example Usage
+
+```bash
+# CSV has account in column 6
+$ into-ledger -j ~/ledger/journal.ldg -csv ~/Downloads/transactions.csv -a 6 -sc 0,1,5 -s 1 -d "2006-01-02"
+```
+
+This will:
+1. Read the account name from column 6 of your CSV
+2. Match it against the `csv-account` mappings in your ledger file
+3. Automatically assign the correct ledger account to each transaction
+4. Warn you if any CSV account couldn't be mapped
+
 Dates
 -----
 
