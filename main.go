@@ -33,7 +33,7 @@ import (
 var (
 	debug      = flag.Bool("debug", false, "Additional debug information if set.")
 	journal    = flag.String("j", "", "Existing journal to learn from.")
-	output     = flag.String("o", "out.ldg", "Journal file to write to.")
+	output     = flag.String("o", "", "Journal file to write to. Defaults to the journal file (-j) if not specified.")
 	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
 	account    = flag.String("a", "", "Account name (e.g., 'Assets:Checking') or CSV column index (e.g., '6') for account field. When using column index, add csv-account mappings in ledger file.")
 	currency   = flag.String("c", "", "Set currency if any.")
@@ -505,6 +505,7 @@ func setDefaultMappings(ks *keys.Shortcuts) {
 	ks.BestEffortAssign('q', ".quit", "default")
 	ks.BestEffortAssign('a', ".show all", "default")
 	ks.BestEffortAssign('s', ".skip", "default")
+	ks.BestEffortAssign('g', ".google", "default")
 }
 
 type kv struct {
@@ -636,6 +637,11 @@ func (p *parser) printAndGetResult(ks keys.Shortcuts, t *Txn) float64 {
 	var repeat bool
 	var category []string
 LOOP:
+	// At depth 2 (after selecting 2 levels), add TODO as an option for the 3rd level
+	if len(category) == 2 {
+		ks.AutoAssign("TODO", label)
+	}
+
 	if len(category) > 0 {
 		fmt.Println()
 		color.New(color.BgWhite, color.FgBlack).Printf("Selected [%s]", strings.Join(category, ":")) // descLength used in Printf.
@@ -665,6 +671,23 @@ LOOP:
 			return 999999.0
 		case ".show all":
 			return math.MaxFloat32
+		case ".google":
+			// Open browser with Google search for the transaction description
+			searchQuery := strings.ReplaceAll(t.Desc, " ", "+")
+			url := fmt.Sprintf("https://www.google.com/search?q=%s", searchQuery)
+
+			// Try to open browser (works on Linux and macOS)
+			cmd := exec.Command("xdg-open", url)
+			if err := cmd.Start(); err != nil {
+				// Try macOS open command
+				cmd = exec.Command("open", url)
+				if err := cmd.Start(); err != nil {
+					fmt.Printf("Could not open browser. Search URL: %s\n", url)
+				}
+			}
+			fmt.Println("Opening Google search in browser...")
+			time.Sleep(500 * time.Millisecond) // Brief pause to show message
+			return 0 // Stay on same transaction
 		}
 
 		category = append(category, opt)
@@ -1149,9 +1172,10 @@ func main() {
 	checkf(err, "Unable to read file: %v", *journal)
 	alldata := includeAll(path.Dir(*journal), data)
 
+	// Default output to journal file if not specified
 	if len(*output) == 0 {
-		oerr("Please specify the output file")
-		return
+		*output = *journal
+		fmt.Printf("Output file not specified, using journal file: %s\n", *output)
 	}
 	if _, err := os.Stat(*output); os.IsNotExist(err) {
 		_, err := os.Create(*output)
