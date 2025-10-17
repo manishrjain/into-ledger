@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/csv"
 	"encoding/gob"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -23,6 +25,8 @@ import (
 
 	yaml "gopkg.in/yaml.v2"
 
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/boltdb/bolt"
 	"github.com/fatih/color"
 	"github.com/jbrukh/bayesian"
@@ -59,7 +63,9 @@ var (
 
 	smallBelow = flag.Float64("below", 0.0, "Use Expenses:Small category for txns below this amount.")
 
-	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
+	aiReview = flag.Bool("ai-review", false, "Use Claude AI to automatically review and categorize transactions")
+
+	rtxn = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
 	rfrom  = regexp.MustCompile(`\W*([:\w]+).*`)
 	rcur   = regexp.MustCompile(`(\d+\.\d+|\d+)`)
@@ -79,6 +85,48 @@ type accountFlags struct {
 
 type configs struct {
 	Accounts map[string]map[string]string // account and the corresponding config.
+	AI       struct {
+		Enabled bool   `yaml:"enabled"`
+		APIKey  string `yaml:"api_key"`
+		Model   string `yaml:"model"`
+	} `yaml:"ai"`
+}
+
+// CategoryScore represents a category with its confidence score
+type CategoryScore struct {
+	Category   string  `json:"category"`
+	Confidence float64 `json:"confidence"`
+}
+
+// ReviewTransaction represents a transaction for AI review
+type ReviewTransaction struct {
+	ID          int             `json:"id"`
+	Date        string          `json:"date"`
+	Description string          `json:"description"`
+	Amount      float64         `json:"amount"`
+	Currency    string          `json:"currency"`
+	Account     string          `json:"account"`
+	Categories  []CategoryScore `json:"categories"`
+}
+
+// ReviewData is the structure sent to AI for review
+type ReviewData struct {
+	Transactions  []ReviewTransaction `json:"transactions"`
+	AllCategories []string            `json:"all_categories"`
+}
+
+// AIDecision represents the AI's categorization decision for a transaction
+type AIDecision struct {
+	ID         int     `json:"id"`
+	Category   string  `json:"category"`
+	Source     string  `json:"source"`      // "ai" or "uncertain"
+	Confidence float64 `json:"confidence"`
+	Reasoning  string  `json:"reasoning,omitempty"`
+}
+
+// AIResponse is the response from Claude API
+type AIResponse struct {
+	Decisions []AIDecision `json:"decisions"`
 }
 
 type Txn struct {
@@ -929,6 +977,429 @@ func (p *parser) categorizeByRules(txns []Txn) []Txn {
 	return unmatched
 }
 
+// generateReviewData creates the JSON structure for AI review
+func (p *parser) generateReviewData(txns []Txn) ReviewData {
+	reviewData := ReviewData{
+		Transactions:  make([]ReviewTransaction, 0, len(txns)),
+		AllCategories: p.accounts,
+	}
+
+	for i, t := range txns {
+		// Get Bayesian classifier predictions
+		desc := strings.ToLower(t.Desc)
+		terms := strings.Split(desc, " ")
+		scores, _, _ := p.cl.LogScores(terms)
+
+		// Create pairs of scores and positions
+		type scorePair struct {
+			score float64
+			pos   int
+		}
+		pairs := make([]scorePair, 0, len(scores))
+		for pos, score := range scores {
+			pairs = append(pairs, scorePair{score, pos})
+		}
+		sort.Slice(pairs, func(i, j int) bool {
+			return pairs[i].score > pairs[j].score
+		})
+
+		// Convert log scores to probabilities (normalize)
+		// Using softmax-like normalization
+		maxScore := pairs[0].score
+		var sumExp float64
+		expScores := make([]float64, len(pairs))
+		for i, pr := range pairs {
+			expScores[i] = math.Exp(pr.score - maxScore)
+			sumExp += expScores[i]
+		}
+
+		// Build categories with normalized confidence scores
+		categories := make([]CategoryScore, 0, 5)
+		for i := 0; i < len(pairs) && i < 5; i++ {
+			pr := pairs[i]
+			confidence := expScores[i] / sumExp
+			categories = append(categories, CategoryScore{
+				Category:   string(p.classes[pr.pos]),
+				Confidence: confidence,
+			})
+		}
+
+		reviewTxn := ReviewTransaction{
+			ID:          i + 1,
+			Date:        t.Date.Format("2006-01-02"),
+			Description: t.Desc,
+			Amount:      t.Cur,
+			Currency:    t.CurName,
+			Account:     t.From,
+			Categories:  categories,
+		}
+		if t.Cur > 0 {
+			reviewTxn.Account = t.To
+		}
+		reviewData.Transactions = append(reviewData.Transactions, reviewTxn)
+	}
+
+	return reviewData
+}
+
+// writeReviewJSON writes the review data to a JSON file
+func writeReviewJSON(reviewData ReviewData, outputPath string) error {
+	reviewPath := outputPath + ".review.json"
+	data, err := json.MarshalIndent(reviewData, "", "  ")
+	if err != nil {
+		return fmt.Errorf("unable to marshal review data: %v", err)
+	}
+	if err := ioutil.WriteFile(reviewPath, data, 0644); err != nil {
+		return fmt.Errorf("unable to write review file: %v", err)
+	}
+	fmt.Printf("Review data written to: %s\n", reviewPath)
+	return nil
+}
+
+// buildAIPrompt creates the prompt for Claude API
+func buildAIPrompt(reviewData ReviewData) string {
+	prompt := `You are a financial transaction categorization expert. Your task is to review transactions and categorize them accurately.
+
+**Decision Rules:**
+1. Analyze the transaction description, amount, and date
+2. Generate your own category choice with confidence score
+3. If your confidence >= 0.7: Use your category, source="ai"
+4. If your confidence < 0.7: Use "Expenses:TODO:Manual", source="uncertain"
+
+**Output Format:**
+Return a JSON object with your categorization decisions:
+
+{
+  "decisions": [
+    {
+      "id": 1,
+      "category": "Expenses:Food:Groceries",
+      "source": "ai",
+      "confidence": 0.85,
+      "reasoning": "Clear grocery store purchase"
+    },
+    {
+      "id": 2,
+      "category": "Expenses:TODO:Manual",
+      "source": "uncertain",
+      "confidence": 0.45,
+      "reasoning": "Ambiguous merchant name"
+    }
+  ]
+}
+
+**Rules:**
+- "id" must match the transaction ID from input
+- "category" should be one of the available categories or "Expenses:TODO:Manual"
+- "source" is either "ai" or "uncertain"
+- "confidence" is between 0 and 1
+- "reasoning" explains your decision (optional for high confidence, required for uncertain)
+
+**Transaction Data:**
+
+`
+	// Add transactions as JSON
+	data, _ := json.MarshalIndent(reviewData, "", "  ")
+	prompt += string(data)
+	prompt += "\n\n**Now generate the JSON response with your categorization decisions:**"
+
+	return prompt
+}
+
+// callClaudeAPI calls the Claude API to categorize transactions and returns decisions
+func callClaudeAPI(apiKey string, model string, reviewData ReviewData) (AIResponse, error) {
+	var emptyResponse AIResponse
+
+	if len(apiKey) == 0 {
+		return emptyResponse, fmt.Errorf("ANTHROPIC_API_KEY not set. Please set it in environment or config.yaml")
+	}
+
+	if len(model) == 0 {
+		model = "claude-sonnet-4-5-20250929"
+	}
+
+	client := anthropic.NewClient(option.WithAPIKey(apiKey))
+	prompt := buildAIPrompt(reviewData)
+
+	if *debug {
+		fmt.Printf("API Key: %s...\n", apiKey[:10])
+		fmt.Printf("Model: %s\n", model)
+		fmt.Printf("Prompt length: %d characters\n", len(prompt))
+	}
+
+	ctx := context.Background()
+	message, err := client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     anthropic.Model(model),
+		MaxTokens: 8192,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
+		},
+	})
+
+	if err != nil {
+		return emptyResponse, fmt.Errorf("claude API call failed: %v", err)
+	}
+
+	// Extract the text content from the response
+	if len(message.Content) == 0 {
+		return emptyResponse, fmt.Errorf("empty response from Claude API")
+	}
+
+	var responseText string
+	for _, block := range message.Content {
+		if block.Type == "text" {
+			responseText += block.Text
+		}
+	}
+
+	// Parse JSON response
+	// Claude might wrap JSON in markdown code blocks, so extract it
+	jsonStart := strings.Index(responseText, "{")
+	jsonEnd := strings.LastIndex(responseText, "}")
+	if jsonStart == -1 || jsonEnd == -1 {
+		return emptyResponse, fmt.Errorf("no JSON found in response: %s", responseText)
+	}
+	jsonText := responseText[jsonStart : jsonEnd+1]
+
+	var aiResponse AIResponse
+	if err := json.Unmarshal([]byte(jsonText), &aiResponse); err != nil {
+		return emptyResponse, fmt.Errorf("failed to parse JSON response: %v\nResponse: %s", err, jsonText)
+	}
+
+	return aiResponse, nil
+}
+
+// convertAIDecisionsToLedger converts AI decisions to ledger format
+func convertAIDecisionsToLedger(decisions []AIDecision, txns []Txn) string {
+	var output strings.Builder
+
+	// Create a map of transaction IDs to transactions
+	txnMap := make(map[int]Txn)
+	for i, t := range txns {
+		txnMap[i+1] = t
+	}
+
+	for _, decision := range decisions {
+		t, ok := txnMap[decision.ID]
+		if !ok {
+			continue
+		}
+
+		// Update transaction category
+		if t.Cur > 0 {
+			t.From = decision.Category
+		} else {
+			t.To = decision.Category
+		}
+
+		// Format: date description\n    ; comments\n    TO amount\n    FROM\n
+		output.WriteString(fmt.Sprintf("%s\t%s\n", t.Date.Format(stamp), t.Desc))
+		output.WriteString(fmt.Sprintf("    ; AI: source=%s, confidence=%.2f\n", decision.Source, decision.Confidence))
+		if len(decision.Reasoning) > 0 {
+			output.WriteString(fmt.Sprintf("    ; AI: %s\n", decision.Reasoning))
+		}
+		// Skip the currency for now.
+		output.WriteString(fmt.Sprintf("\t%-20s\t\t%.2f\n", t.To, math.Abs(t.Cur)))
+		output.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
+	}
+
+	return output.String()
+}
+
+// processAIReview handles the AI review workflow
+func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, model string) error {
+	// Split transactions into high-confidence (auto-approve) and low-confidence (needs AI review)
+	const confidenceThreshold = 0.8
+	var highConfidenceTxns []Txn
+	var lowConfidenceTxns []Txn
+
+	fmt.Printf("Analyzing %d transactions...\n", len(txns))
+
+	for _, t := range txns {
+		// Get Bayesian classifier prediction
+		desc := strings.ToLower(t.Desc)
+		terms := strings.Split(desc, " ")
+		scores, _, _ := p.cl.LogScores(terms)
+
+		// Find top score and normalize to confidence
+		if len(scores) == 0 {
+			lowConfidenceTxns = append(lowConfidenceTxns, t)
+			continue
+		}
+
+		// Get max score for normalization
+		maxScore := scores[0]
+		for _, score := range scores {
+			if score > maxScore {
+				maxScore = score
+			}
+		}
+
+		// Normalize scores using softmax
+		var sumExp float64
+		expScores := make([]float64, len(scores))
+		for i, score := range scores {
+			expScores[i] = math.Exp(score - maxScore)
+			sumExp += expScores[i]
+		}
+
+		// Get top confidence
+		topConfidence := expScores[0] / sumExp
+		for _, exp := range expScores {
+			conf := exp / sumExp
+			if conf > topConfidence {
+				topConfidence = conf
+			}
+		}
+
+		if topConfidence >= confidenceThreshold {
+			// Auto-approve with Bayesian prediction
+			hits := p.topHits(t.Desc)
+			if len(hits) > 0 {
+				if t.Cur > 0 {
+					t.From = string(hits[0])
+				} else {
+					t.To = string(hits[0])
+				}
+			}
+			highConfidenceTxns = append(highConfidenceTxns, t)
+		} else {
+			lowConfidenceTxns = append(lowConfidenceTxns, t)
+		}
+	}
+
+	fmt.Printf("High confidence (auto-approved): %d transactions\n", len(highConfidenceTxns))
+	fmt.Printf("Low confidence (needs AI review): %d transactions\n", len(lowConfidenceTxns))
+
+	// Open output file for appending
+	of, err := os.OpenFile(outputPath, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("unable to open output file: %v", err)
+	}
+	defer of.Close()
+
+	// Write header once
+	_, err = of.WriteString(fmt.Sprintf("; AI-assisted categorization at %v\n\n", time.Now()))
+	if err != nil {
+		return fmt.Errorf("unable to write header: %v", err)
+	}
+
+	// Open AI ledger file for writing
+	aiLedgerPath := outputPath + ".ai.ldg"
+	aiFile, err := os.Create(aiLedgerPath)
+	if err != nil {
+		return fmt.Errorf("unable to create AI ledger file: %v", err)
+	}
+	defer aiFile.Close()
+
+	// Write high-confidence transactions directly
+	if len(highConfidenceTxns) > 0 {
+		fmt.Println("\nWriting high-confidence transactions...")
+		_, err = aiFile.WriteString("; High-confidence Bayesian predictions (auto-approved)\n\n")
+		if err != nil {
+			return fmt.Errorf("unable to write section header: %v", err)
+		}
+
+		for _, t := range highConfidenceTxns {
+			// Format: date description\n    ; comments\n    TO amount\n    FROM\n
+			var b bytes.Buffer
+			b.WriteString(fmt.Sprintf("%s\t%s\n", t.Date.Format(stamp), t.Desc))
+			b.WriteString(fmt.Sprintf("    ; AI: source=bayesian, confidence>=%.2f\n", confidenceThreshold))
+			// Skip currency for now
+			b.WriteString(fmt.Sprintf("\t%-20s\t%.2f\n", t.To, math.Abs(t.Cur)))
+			b.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
+			output := b.String()
+
+			if _, err := aiFile.WriteString(output); err != nil {
+				return fmt.Errorf("unable to write to AI ledger file: %v", err)
+			}
+			if _, err := of.WriteString(output); err != nil {
+				return fmt.Errorf("unable to write to output file: %v", err)
+			}
+		}
+		fmt.Printf("Wrote %d high-confidence transactions\n", len(highConfidenceTxns))
+	}
+
+	// Process low-confidence transactions with Claude API
+	if len(lowConfidenceTxns) > 0 {
+		fmt.Printf("\nSending %d low-confidence transactions to Claude for review...\n", len(lowConfidenceTxns))
+
+		_, err = aiFile.WriteString("; Low-confidence transactions reviewed by Claude AI\n\n")
+		if err != nil {
+			return fmt.Errorf("unable to write section header: %v", err)
+		}
+
+		// Batch size for API calls
+		batchSize := 20
+		totalBatches := (len(lowConfidenceTxns) + batchSize - 1) / batchSize
+
+		for batchNum := 0; batchNum < totalBatches; batchNum++ {
+			start := batchNum * batchSize
+			end := start + batchSize
+			if end > len(lowConfidenceTxns) {
+				end = len(lowConfidenceTxns)
+			}
+
+			batch := lowConfidenceTxns[start:end]
+			fmt.Printf("Processing batch %d/%d (%d transactions)...\n", batchNum+1, totalBatches, len(batch))
+
+			// Generate review data for this batch
+			reviewData := p.generateReviewData(batch)
+
+			// Write review JSON for this batch (for debugging/inspection)
+			if batchNum == 0 || *debug {
+				batchReviewPath := fmt.Sprintf("%s.review.batch%d.json", outputPath, batchNum+1)
+				if err := writeReviewJSONToPath(reviewData, batchReviewPath); err != nil {
+					return err
+				}
+			}
+
+			// Call Claude API for this batch
+			aiResponse, err := callClaudeAPI(apiKey, model, reviewData)
+			if err != nil {
+				return fmt.Errorf("batch %d failed: %v", batchNum+1, err)
+			}
+
+			// Convert AI decisions to ledger format
+			ledgerOutput := convertAIDecisionsToLedger(aiResponse.Decisions, batch)
+
+			// Append to both AI ledger file and main output file
+			if _, err := aiFile.WriteString(ledgerOutput); err != nil {
+				return fmt.Errorf("unable to write to AI ledger file: %v", err)
+			}
+
+			if _, err := of.WriteString(ledgerOutput); err != nil {
+				return fmt.Errorf("unable to write to output file: %v", err)
+			}
+
+			fmt.Printf("Batch %d/%d completed\n", batchNum+1, totalBatches)
+		}
+	}
+
+	fmt.Printf("\n✓ AI categorization completed!\n")
+	fmt.Printf("  - High-confidence (auto-approved): %d transactions\n", len(highConfidenceTxns))
+	fmt.Printf("  - AI-reviewed: %d transactions\n", len(lowConfidenceTxns))
+	fmt.Printf("  - Output written to: %s\n", aiLedgerPath)
+	fmt.Printf("  - Appended to: %s\n", outputPath)
+	fmt.Printf("\nReview transactions marked as 'TODO:Manual' for manual categorization.\n")
+	return nil
+}
+
+// writeReviewJSONToPath writes review data to a specific path
+func writeReviewJSONToPath(reviewData ReviewData, filePath string) error {
+	data, err := json.MarshalIndent(reviewData, "", "  ")
+	if err != nil {
+		return fmt.Errorf("unable to marshal review data: %v", err)
+	}
+	if err := ioutil.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("unable to write review file: %v", err)
+	}
+	if *debug {
+		fmt.Printf("Review data written to: %s\n", filePath)
+	}
+	return nil
+}
+
 func (p *parser) removeDuplicates(txns []Txn) []Txn {
 	if len(txns) == 0 {
 		return txns
@@ -1279,6 +1750,38 @@ func main() {
 	})
 	txns = p.categorizeByRules(txns)
 	txns = p.categorizeBelow(txns)
+
+	// Check if AI review mode is enabled
+	if *aiReview {
+		// Get API key from environment or config
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		model := ""
+
+		// Read config for AI settings if available
+		configPath := path.Join(*configDir, "config.yaml")
+		if configData, err := ioutil.ReadFile(configPath); err == nil {
+			var c configs
+			if err := yaml.Unmarshal(configData, &c); err == nil {
+				if len(c.AI.APIKey) > 0 {
+					apiKey = c.AI.APIKey
+				}
+				if len(c.AI.Model) > 0 {
+					model = c.AI.Model
+				}
+			}
+		}
+
+		// Process with AI
+		if err := p.processAIReview(txns, *output, apiKey, model); err != nil {
+			log.Fatalf("AI review failed: %v", err)
+		}
+
+		fmt.Printf("\nAI review completed successfully!\n")
+		fmt.Printf("Review the transactions marked as 'TODO:Manual' in %s\n", *output)
+		return
+	}
+
+	// Original interactive mode
 	p.showAndCategorizeTxns(txns)
 
 	final := p.iterateDB()
