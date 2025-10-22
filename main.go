@@ -35,7 +35,7 @@ import (
 )
 
 var (
-	debug      = flag.Bool("debug", false, "Additional debug information if set.")
+	debug      = flag.Bool("debug", true, "Additional debug information if set.")
 	journal    = flag.String("j", "", "Existing journal to learn from.")
 	output     = flag.String("o", "", "Journal file to write to. Defaults to the journal file (-j) if not specified.")
 	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
@@ -783,6 +783,11 @@ func (p *parser) categorizeTxn(t *Txn, idx, total int) float64 {
 			fmt.Println()
 		}
 	}
+	// Display AI reasoning if present
+	if len(t.AIReason) > 0 {
+		color.New(color.BgCyan, color.FgBlack).Printf("[AI] %s", t.AIReason)
+		fmt.Println()
+	}
 	fmt.Println()
 
 	hits := p.topHits(t.Desc)
@@ -802,6 +807,11 @@ func (p *parser) categorizeTxn(t *Txn, idx, total int) float64 {
 }
 
 func (p *parser) classifyTxn(t *Txn) {
+	// Don't overwrite categories that were already set by AI review
+	if len(t.AIReason) > 0 {
+		return
+	}
+
 	if !t.Done {
 		hits := p.topHits(t.Desc)
 		if t.Cur < 0 {
@@ -885,6 +895,10 @@ func (p *parser) showAndCategorizeTxns(rtxns []Txn) {
 func ledgerFormat(t Txn) string {
 	var b bytes.Buffer
 	b.WriteString(fmt.Sprintf("%s\t%s\n", t.Date.Format(stamp), t.Desc))
+	// Include AI reasoning as a comment if present
+	if len(t.AIReason) > 0 {
+		b.WriteString(fmt.Sprintf("    ; %s\n", t.AIReason))
+	}
 	b.WriteString(fmt.Sprintf("\t%-20s\t%.2f%s\n", t.To, math.Abs(t.Cur), t.CurName))
 	b.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
 	return b.String()
@@ -1149,7 +1163,7 @@ Return a JSON object with your categorization decisions in the SAME ORDER as the
 }
 
 // callClaudeAPI calls the Claude API to categorize transactions and returns decisions
-func callClaudeAPI(apiKey string, model string, reviewData ReviewData) (AIResponse, error) {
+func callClaudeAPI(apiKey string, model string, reviewData ReviewData, outputPath string, batchNum int) (AIResponse, error) {
 	var emptyResponse AIResponse
 
 	if len(apiKey) == 0 {
@@ -1163,7 +1177,15 @@ func callClaudeAPI(apiKey string, model string, reviewData ReviewData) (AIRespon
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 	prompt := buildAIPrompt(reviewData)
 
+	// Write request (prompt) to file for debugging
 	if *debug {
+		requestPath := fmt.Sprintf("%s.batch%d.ai-req.txt", outputPath, batchNum)
+		if err := ioutil.WriteFile(requestPath, []byte(prompt), 0644); err != nil {
+			fmt.Printf("Warning: Unable to write request to %s: %v\n", requestPath, err)
+		} else {
+			fmt.Printf("Request written to: %s\n", requestPath)
+		}
+
 		fmt.Printf("API Key: %s...\n", apiKey[:10])
 		fmt.Printf("Model: %s\n", model)
 		fmt.Printf("Prompt length: %d characters\n", len(prompt))
@@ -1191,6 +1213,16 @@ func callClaudeAPI(apiKey string, model string, reviewData ReviewData) (AIRespon
 	for _, block := range message.Content {
 		if block.Type == "text" {
 			responseText += block.Text
+		}
+	}
+
+	// Write response to file for debugging
+	if *debug {
+		responsePath := fmt.Sprintf("%s.batch%d.ai-resp.txt", outputPath, batchNum)
+		if err := ioutil.WriteFile(responsePath, []byte(responseText), 0644); err != nil {
+			fmt.Printf("Warning: Unable to write response to %s: %v\n", responsePath, err)
+		} else {
+			fmt.Printf("Response written to: %s\n", responsePath)
 		}
 	}
 
@@ -1243,9 +1275,9 @@ func convertAIDecisionsToLedger(decisions []AIDecision, txns []Txn) string {
 	return output.String()
 }
 
-// processAIReview handles the AI review workflow and returns uncertain transactions for manual review
+// processAIReview handles the AI review workflow and returns all transactions for manual review
 func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, model string) ([]Txn, error) {
-	// Split transactions into high-confidence (auto-approve) and low-confidence (needs AI review)
+	// Split transactions into high-confidence (Bayesian) and low-confidence (needs AI review)
 	confidenceThreshold := *bayesianThreshold
 	var highConfidenceTxns []Txn
 	var lowConfidenceTxns []Txn
@@ -1254,8 +1286,7 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 
 	for _, t := range txns {
 		// Get Bayesian classifier prediction
-		desc := strings.ToLower(t.Desc)
-		terms := strings.Split(desc, " ")
+		terms := prepareDescriptionForClassification(t.Desc)
 		scores, _, _ := p.cl.LogScores(terms)
 
 		// Find top score and normalize to confidence
@@ -1290,7 +1321,7 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 		}
 
 		if topConfidence >= confidenceThreshold {
-			// Auto-approve with Bayesian prediction
+			// High-confidence Bayesian prediction
 			hits := p.topHits(t.Desc)
 			if len(hits) > 0 {
 				if t.Cur > 0 {
@@ -1299,75 +1330,23 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 					t.To = string(hits[0])
 				}
 			}
+			t.AIReason = fmt.Sprintf("Bayesian: confidence=%.2f", topConfidence)
 			highConfidenceTxns = append(highConfidenceTxns, t)
 		} else {
 			lowConfidenceTxns = append(lowConfidenceTxns, t)
 		}
 	}
 
-	fmt.Printf("High confidence (auto-approved): %d transactions\n", len(highConfidenceTxns))
+	fmt.Printf("High confidence Bayesian: %d transactions\n", len(highConfidenceTxns))
 	fmt.Printf("Low confidence (needs AI review): %d transactions\n", len(lowConfidenceTxns))
 
-	// Open output file for appending
-	of, err := os.OpenFile(outputPath, os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return nil, fmt.Errorf("unable to open output file: %v", err)
-	}
-	defer of.Close()
-
-	// Write header once
-	_, err = of.WriteString(fmt.Sprintf("; AI-assisted categorization at %v\n\n", time.Now()))
-	if err != nil {
-		return nil, fmt.Errorf("unable to write header: %v", err)
-	}
-
-	// Open AI ledger file for writing
-	aiLedgerPath := outputPath + ".ai.ldg"
-	aiFile, err := os.Create(aiLedgerPath)
-	if err != nil {
-		return nil, fmt.Errorf("unable to create AI ledger file: %v", err)
-	}
-	defer aiFile.Close()
-
-	// Track uncertain transactions that need manual review
-	var uncertainTxns []Txn
-
-	// Write high-confidence transactions directly
-	if len(highConfidenceTxns) > 0 {
-		fmt.Println("\nWriting high-confidence transactions...")
-		_, err = aiFile.WriteString("; High-confidence Bayesian predictions (auto-approved)\n\n")
-		if err != nil {
-			return nil, fmt.Errorf("unable to write section header: %v", err)
-		}
-
-		for _, t := range highConfidenceTxns {
-			// Format: date description\n    ; comments\n    TO amount\n    FROM\n
-			var b bytes.Buffer
-			b.WriteString(fmt.Sprintf("%s\t%s\n", t.Date.Format(stamp), t.Desc))
-			b.WriteString(fmt.Sprintf("    ; AI: source=bayesian, confidence>=%.2f\n", confidenceThreshold))
-			// Skip currency for now
-			b.WriteString(fmt.Sprintf("\t%-20s\t%.2f\n", t.To, math.Abs(t.Cur)))
-			b.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
-			output := b.String()
-
-			if _, err := aiFile.WriteString(output); err != nil {
-				return nil, fmt.Errorf("unable to write to AI ledger file: %v", err)
-			}
-			if _, err := of.WriteString(output); err != nil {
-				return nil, fmt.Errorf("unable to write to output file: %v", err)
-			}
-		}
-		fmt.Printf("Wrote %d high-confidence transactions\n", len(highConfidenceTxns))
-	}
+	// All transactions to return for manual review
+	var allTxns []Txn
+	allTxns = append(allTxns, highConfidenceTxns...)
 
 	// Process low-confidence transactions with Claude API
 	if len(lowConfidenceTxns) > 0 {
 		fmt.Printf("\nSending %d low-confidence transactions to Claude for review...\n", len(lowConfidenceTxns))
-
-		_, err = aiFile.WriteString("; Low-confidence transactions reviewed by Claude AI\n\n")
-		if err != nil {
-			return nil, fmt.Errorf("unable to write section header: %v", err)
-		}
 
 		// Batch size for API calls
 		batchSize := 20
@@ -1395,7 +1374,7 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 			}
 
 			// Call Claude API for this batch
-			aiResponse, err := callClaudeAPI(apiKey, model, reviewData)
+			aiResponse, err := callClaudeAPI(apiKey, model, reviewData, outputPath, batchNum)
 			if err != nil {
 				return nil, fmt.Errorf("batch %d failed: %v", batchNum+1, err)
 			}
@@ -1405,66 +1384,32 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 				"Claude returned %d decisions for %d transactions in batch %d",
 				len(aiResponse.Decisions), len(batch), batchNum+1)
 
-			// Separate high-confidence and uncertain decisions
-			var highConfIndices []int
-			var uncertainIndices []int
-
+			// Store AI decisions in transactions and add to allTxns
 			for i, decision := range aiResponse.Decisions {
-				if decision.Source == "uncertain" || strings.Contains(decision.Category, "TODO:Manual") {
-					uncertainIndices = append(uncertainIndices, i)
-				} else {
-					highConfIndices = append(highConfIndices, i)
-				}
-			}
-
-			// Write high-confidence AI decisions immediately
-			if len(highConfIndices) > 0 {
-				var highConfDecisions []AIDecision
-				var highConfTxns []Txn
-				for _, idx := range highConfIndices {
-					highConfDecisions = append(highConfDecisions, aiResponse.Decisions[idx])
-					highConfTxns = append(highConfTxns, batch[idx])
-				}
-				ledgerOutput := convertAIDecisionsToLedger(highConfDecisions, highConfTxns)
-				if _, err := aiFile.WriteString(ledgerOutput); err != nil {
-					return nil, fmt.Errorf("unable to write to AI ledger file: %v", err)
-				}
-				if _, err := of.WriteString(ledgerOutput); err != nil {
-					return nil, fmt.Errorf("unable to write to output file: %v", err)
-				}
-			}
-
-			// Add uncertain transactions to the list for manual review
-			for _, idx := range uncertainIndices {
-				t := batch[idx]
-				decision := aiResponse.Decisions[idx]
-				t.AIReason = decision.Reasoning
-				// Apply the uncertain category
+				t := batch[i]
+				// Store AI reasoning
+				t.AIReason = fmt.Sprintf("AI: confidence=%.2f, %s", decision.Confidence, decision.Reasoning)
+				// Apply the category
 				if t.Cur > 0 {
 					t.From = decision.Category
 				} else {
 					t.To = decision.Category
 				}
-				uncertainTxns = append(uncertainTxns, t)
+				allTxns = append(allTxns, t)
 			}
 
-			fmt.Printf("Batch %d/%d: %d approved, %d need manual review\n",
-				batchNum+1, totalBatches, len(highConfIndices), len(uncertainIndices))
+			fmt.Printf("Batch %d/%d: %d transactions categorized by AI\n",
+				batchNum+1, totalBatches, len(batch))
 		}
 	}
 
 	fmt.Printf("\n✓ AI categorization completed!\n")
-	fmt.Printf("  - High-confidence (auto-approved): %d transactions\n", len(highConfidenceTxns))
-	fmt.Printf("  - AI-reviewed and approved: %d transactions\n", len(lowConfidenceTxns)-len(uncertainTxns))
-	fmt.Printf("  - Uncertain (need manual review): %d transactions\n", len(uncertainTxns))
-	fmt.Printf("  - Output written to: %s\n", aiLedgerPath)
-	fmt.Printf("  - Appended to: %s\n", outputPath)
+	fmt.Printf("  - Total transactions: %d\n", len(allTxns))
+	fmt.Printf("  - Bayesian high-confidence: %d\n", len(highConfidenceTxns))
+	fmt.Printf("  - AI-reviewed: %d\n", len(lowConfidenceTxns))
+	fmt.Printf("\nAll transactions will be presented for manual review.\n")
 
-	if len(uncertainTxns) > 0 {
-		fmt.Printf("\nReturning %d uncertain transactions for manual categorization.\n", len(uncertainTxns))
-	}
-
-	return uncertainTxns, nil
+	return allTxns, nil
 }
 
 // writeReviewJSONToPath writes review data to a specific path
@@ -1853,27 +1798,20 @@ func main() {
 			}
 		}
 
-		// Process with AI and get uncertain transactions
-		uncertainTxns, err := p.processAIReview(txns, *output, apiKey, model)
+		// Process with AI and get all transactions for manual review
+		reviewTxns, err := p.processAIReview(txns, *output, apiKey, model)
 		if err != nil {
 			log.Fatalf("AI review failed: %v", err)
 		}
 
-		// Replace txns with uncertain ones for manual categorization
-		txns = uncertainTxns
-
-		// If no uncertain transactions, we're done
-		if len(txns) == 0 {
-			fmt.Printf("\n✓ All transactions successfully categorized by AI!\n")
-			checkf(of.Close(), "Unable to close output file: %v", of.Name())
-			return
-		}
+		// All AI-categorized transactions will be shown for manual review
+		txns = reviewTxns
 
 		fmt.Printf("\n" + strings.Repeat("=", 70) + "\n")
-		fmt.Printf("MANUAL CATEGORIZATION REQUIRED\n")
+		fmt.Printf("MANUAL REVIEW OF AI CATEGORIZATIONS\n")
 		fmt.Printf(strings.Repeat("=", 70) + "\n\n")
-		fmt.Printf("AI was uncertain about %d transactions.\n", len(txns))
-		fmt.Printf("Please review and categorize them manually.\n\n")
+		fmt.Printf("All %d transactions are ready for your review.\n", len(txns))
+		fmt.Printf("AI reasoning is displayed for each transaction to help with your decision.\n\n")
 	}
 
 	// Original interactive mode
