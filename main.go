@@ -40,7 +40,7 @@ var (
 	output     = flag.String("o", "", "Journal file to write to. Defaults to the journal file (-j) if not specified.")
 	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
 	account    = flag.String("a", "", "Account name (e.g., 'Assets:Checking') or CSV column index (e.g., '6') for account field. When using column index, add csv-account mappings in ledger file.")
-	currency   = flag.String("c", "", "Set currency if any.")
+	currency   = flag.String("currency", "$", "Set currency if any.")
 	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
 	selectCols = flag.String("sc", "", "Comma separated list of columns to select from CSV (e.g., '0,1,5' for columns 0, 1, and 5).")
 	dateFormat = flag.String("d", "01/02/2006",
@@ -65,7 +65,9 @@ var (
 
 	aiReview = flag.Bool("ai-review", false, "Use Claude AI to automatically review and categorize transactions")
 
-	bayesianThreshold = flag.Float64("bayesian-threshold", 0.95, "Auto-approve Bayesian predictions above this confidence (0.0-1.0). Set higher to send more transactions to AI review.")
+	bayesianThreshold = flag.Float64("bayesian-threshold", 1.1, "Auto-approve Bayesian predictions above this confidence (0.0-1.0). Set higher to send more transactions to AI review.")
+
+	batchSize = flag.Int("batch-size", 100, "Number of transactions to send to Claude API per batch (default 100). Higher values reduce API calls but increase prompt size.")
 
 	rtxn = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -110,10 +112,24 @@ type ReviewTransaction struct {
 	Categories  []CategoryScore `json:"categories"`
 }
 
+// ExampleTransaction represents a sample transaction for a category
+type ExampleTransaction struct {
+	Date        string  `json:"date"`
+	Description string  `json:"description"`
+	Amount      float64 `json:"amount"`
+}
+
+// CategoryInfo represents a category with its metadata
+type CategoryInfo struct {
+	Name     string                 `json:"name"`
+	Comment  string                 `json:"comment,omitempty"`
+	Examples []ExampleTransaction   `json:"examples,omitempty"`
+}
+
 // ReviewData is the structure sent to AI for review
 type ReviewData struct {
 	Transactions  []ReviewTransaction `json:"transactions"`
-	AllCategories []string            `json:"all_categories"`
+	AllCategories []CategoryInfo      `json:"all_categories"`
 }
 
 // AIDecision represents the AI's categorization decision for a transaction
@@ -180,13 +196,14 @@ func assignForAccount(account string) {
 }
 
 type parser struct {
-	db             *bolt.DB
-	data           []byte
-	txns           []Txn
-	classes        []bayesian.Class
-	cl             *bayesian.Classifier
-	accounts       []string
-	accountMapping map[string]string // maps CSV account identifiers to ledger accounts
+	db              *bolt.DB
+	data            []byte
+	txns            []Txn
+	classes         []bayesian.Class
+	cl              *bayesian.Classifier
+	accounts        []string
+	accountMapping  map[string]string // maps CSV account identifiers to ledger accounts
+	accountComments map[string]string // maps account names to their comments/descriptions
 }
 
 func (p *parser) parseTransactions() {
@@ -230,19 +247,56 @@ func (p *parser) parseTransactions() {
 }
 
 func (p *parser) parseAccounts() {
+	p.accountComments = make(map[string]string)
 	s := bufio.NewScanner(bytes.NewReader(p.data))
 	var acc string
+	var comments []string
+	rcomment := regexp.MustCompile(`^\s*;(.*)`)
+
 	for s.Scan() {
-		m := racc.FindStringSubmatch(s.Text())
-		if len(m) < 2 {
+		line := s.Text()
+
+		// Check if this is an account declaration
+		m := racc.FindStringSubmatch(line)
+		if len(m) >= 2 && len(m[1]) > 0 {
+			// Save previous account with its comments if any
+			if len(acc) > 0 && len(comments) > 0 {
+				p.accountComments[acc] = strings.Join(comments, " ")
+			}
+
+			// Start new account
+			acc = m[1]
+			comments = nil
+			p.accounts = append(p.accounts, acc)
+			assignForAccount(acc)
 			continue
 		}
-		acc = m[1]
-		if len(acc) == 0 {
-			continue
+
+		// Check if this is a comment line (for the current account)
+		if len(acc) > 0 {
+			m := rcomment.FindStringSubmatch(line)
+			if len(m) >= 2 {
+				comment := strings.TrimSpace(m[1])
+				// Skip csv-account mapping comments (handled separately)
+				if !strings.HasPrefix(comment, "csv-account:") && len(comment) > 0 {
+					comments = append(comments, comment)
+				}
+			} else if len(strings.TrimSpace(line)) == 0 && len(comments) > 0 {
+				// Empty line marks end of account declaration
+				p.accountComments[acc] = strings.Join(comments, " ")
+				comments = nil
+				acc = ""
+			}
 		}
-		p.accounts = append(p.accounts, acc)
-		assignForAccount(acc)
+	}
+
+	// Save last account's comments if any
+	if len(acc) > 0 && len(comments) > 0 {
+		p.accountComments[acc] = strings.Join(comments, " ")
+	}
+
+	if *debug && len(p.accountComments) > 0 {
+		fmt.Printf("[Account Comments] Found %d accounts with descriptions\n", len(p.accountComments))
 	}
 }
 
@@ -498,6 +552,8 @@ func parseTransactionsFromCSV(in []byte, accountColIdx int) []Txn {
 	var skipped int
 	for {
 		t = Txn{Key: make([]byte, 16)}
+		t.CurName = *currency // Use default, until we have CSV currency name parsing.
+
 		// Have a unique key for each transaction in CSV, so we can unique identify and
 		// persist them as we modify their category.
 		_, err := rand.Read(t.Key)
@@ -552,42 +608,12 @@ func parseTransactionsFromCSV(in []byte, accountColIdx int) []Txn {
 	return result
 }
 
-func assignFor(opt string, cl bayesian.Class, keys map[rune]string) bool {
-	for i := 0; i < len(opt); i++ {
-		ch := rune(opt[i])
-		if _, has := keys[ch]; !has {
-			keys[ch] = string(cl)
-			return true
-		}
-	}
-	return false
-}
-
 func setDefaultMappings(ks *keys.Shortcuts) {
 	ks.BestEffortAssign('b', ".back", "default")
 	ks.BestEffortAssign('q', ".quit", "default")
 	ks.BestEffortAssign('a', ".show all", "default")
 	ks.BestEffortAssign('s', ".skip", "default")
 	ks.BestEffortAssign('g', ".google", "default")
-}
-
-type kv struct {
-	key rune
-	val string
-}
-
-type byVal []kv
-
-func (b byVal) Len() int {
-	return len(b)
-}
-
-func (b byVal) Less(i int, j int) bool {
-	return b[i].val < b[j].val
-}
-
-func (b byVal) Swap(i int, j int) {
-	b[i], b[j] = b[j], b[i]
 }
 
 func singleCharMode() {
@@ -899,7 +925,7 @@ func ledgerFormat(t Txn) string {
 	if len(t.AIReason) > 0 {
 		b.WriteString(fmt.Sprintf("    ; %s\n", t.AIReason))
 	}
-	b.WriteString(fmt.Sprintf("\t%-20s\t%.2f%s\n", t.To, math.Abs(t.Cur), t.CurName))
+	b.WriteString(fmt.Sprintf("\t%-20s\t%s %.2f\n", t.To, t.CurName, math.Abs(t.Cur)))
 	b.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
 	return b.String()
 }
@@ -1006,11 +1032,104 @@ func (p *parser) categorizeByRules(txns []Txn) []Txn {
 	return unmatched
 }
 
+// selectDiverseExamples selects up to 3 diverse example transactions for a category
+// It prioritizes high-confidence transactions with diverse descriptions
+func (p *parser) selectDiverseExamples(category string, maxExamples int) []ExampleTransaction {
+	var examples []ExampleTransaction
+
+	// Find all transactions in this category
+	type txnScore struct {
+		txn        Txn
+		confidence float64
+	}
+	var candidates []txnScore
+
+	for _, t := range p.txns {
+		if t.To == category {
+			// Calculate confidence for this transaction
+			terms := prepareDescriptionForClassification(t.Desc)
+			scores, _, _ := p.cl.LogScores(terms)
+
+			// Find the score for this category
+			for i, class := range p.classes {
+				if string(class) == category && i < len(scores) {
+					// Normalize using softmax-like approach
+					maxScore := scores[0]
+					for _, s := range scores {
+						if s > maxScore {
+							maxScore = s
+						}
+					}
+					confidence := math.Exp(scores[i] - maxScore)
+					candidates = append(candidates, txnScore{t, confidence})
+					break
+				}
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return examples
+	}
+
+	// Sort by confidence (highest first)
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].confidence > candidates[j].confidence
+	})
+
+	// Select diverse examples by comparing descriptions
+	// Use letter-only comparison to check for similarity
+	selected := make([]txnScore, 0, maxExamples)
+	for _, candidate := range candidates {
+		if len(selected) >= maxExamples {
+			break
+		}
+
+		// Check if this description is sufficiently different from already selected ones
+		isDiverse := true
+		candidateDesc := lettersOnly.ReplaceAllString(candidate.txn.Desc, "")
+
+		for _, sel := range selected {
+			selDesc := lettersOnly.ReplaceAllString(sel.txn.Desc, "")
+			if candidateDesc == selDesc {
+				isDiverse = false
+				break
+			}
+		}
+
+		if isDiverse {
+			selected = append(selected, candidate)
+		}
+	}
+
+	// Convert to ExampleTransaction format
+	for _, s := range selected {
+		examples = append(examples, ExampleTransaction{
+			Date:        s.txn.Date.Format("2006-01-02"),
+			Description: s.txn.Desc,
+			Amount:      s.txn.Cur,
+		})
+	}
+
+	return examples
+}
+
 // generateReviewData creates the JSON structure for AI review
 func (p *parser) generateReviewData(txns []Txn) ReviewData {
+	// Build enhanced category information with comments and examples
+	allCategories := make([]CategoryInfo, 0, len(p.accounts))
+	for _, accountName := range p.accounts {
+		catInfo := CategoryInfo{
+			Name:     accountName,
+			Comment:  p.accountComments[accountName],
+			Examples: p.selectDiverseExamples(accountName, 5),
+		}
+		allCategories = append(allCategories, catInfo)
+	}
+
 	reviewData := ReviewData{
 		Transactions:  make([]ReviewTransaction, 0, len(txns)),
-		AllCategories: p.accounts,
+		AllCategories: allCategories,
 	}
 
 	for _, t := range txns {
@@ -1069,23 +1188,17 @@ func (p *parser) generateReviewData(txns []Txn) ReviewData {
 	return reviewData
 }
 
-// writeReviewJSON writes the review data to a JSON file
-func writeReviewJSON(reviewData ReviewData, outputPath string) error {
-	reviewPath := outputPath + ".review.json"
-	data, err := json.MarshalIndent(reviewData, "", "  ")
-	if err != nil {
-		return fmt.Errorf("unable to marshal review data: %v", err)
-	}
-	if err := ioutil.WriteFile(reviewPath, data, 0644); err != nil {
-		return fmt.Errorf("unable to write review file: %v", err)
-	}
-	fmt.Printf("Review data written to: %s\n", reviewPath)
-	return nil
-}
-
 // buildAIPrompt creates the prompt for Claude API
 func buildAIPrompt(reviewData ReviewData) string {
 	prompt := `You are a financial transaction categorization expert. Your task is to review transactions and categorize them accurately.
+
+**Available Categories Context:**
+The "all_categories" field contains detailed information about each available category:
+- "name": The category account name (e.g., "Expenses:Food:Groceries")
+- "comment": Human-written description from the ledger file explaining what this category is for
+- "examples": Up to 3 diverse example transactions from historical data that were previously categorized here
+
+Use this context to understand what types of transactions belong in each category. The examples show real patterns of spending, and the comments provide the user's intent for each category.
 
 **Bayesian Classifier Context:**
 Each transaction includes predictions from a Bayesian classifier trained on historical data. The "categories" field shows the top 5 predicted categories with confidence scores (0-1), sorted by confidence.
@@ -1243,38 +1356,6 @@ func callClaudeAPI(apiKey string, model string, reviewData ReviewData, outputPat
 	return aiResponse, nil
 }
 
-// convertAIDecisionsToLedger converts AI decisions to ledger format
-func convertAIDecisionsToLedger(decisions []AIDecision, txns []Txn) string {
-	assertf(len(decisions) == len(txns),
-		"Decision count mismatch: got %d decisions for %d transactions",
-		len(decisions), len(txns))
-
-	var output strings.Builder
-
-	for i, decision := range decisions {
-		t := txns[i]
-
-		// Update transaction category
-		if t.Cur > 0 {
-			t.From = decision.Category
-		} else {
-			t.To = decision.Category
-		}
-
-		// Format: date description\n    ; comments\n    TO amount\n    FROM\n
-		output.WriteString(fmt.Sprintf("%s\t%s\n", t.Date.Format(stamp), t.Desc))
-		output.WriteString(fmt.Sprintf("    ; AI: source=%s, confidence=%.2f\n", decision.Source, decision.Confidence))
-		if len(decision.Reasoning) > 0 {
-			output.WriteString(fmt.Sprintf("    ; AI: %s\n", decision.Reasoning))
-		}
-		// Skip the currency for now.
-		output.WriteString(fmt.Sprintf("\t%-20s\t\t%.2f\n", t.To, math.Abs(t.Cur)))
-		output.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
-	}
-
-	return output.String()
-}
-
 // processAIReview handles the AI review workflow and returns all transactions for manual review
 func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, model string) ([]Txn, error) {
 	// Split transactions into high-confidence (Bayesian) and low-confidence (needs AI review)
@@ -1349,12 +1430,11 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 		fmt.Printf("\nSending %d low-confidence transactions to Claude for review...\n", len(lowConfidenceTxns))
 
 		// Batch size for API calls
-		batchSize := 20
-		totalBatches := (len(lowConfidenceTxns) + batchSize - 1) / batchSize
+		totalBatches := (len(lowConfidenceTxns) + *batchSize - 1) / *batchSize
 
 		for batchNum := 0; batchNum < totalBatches; batchNum++ {
-			start := batchNum * batchSize
-			end := start + batchSize
+			start := batchNum * *batchSize
+			end := start + *batchSize
 			if end > len(lowConfidenceTxns) {
 				end = len(lowConfidenceTxns)
 			}
