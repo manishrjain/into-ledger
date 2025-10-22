@@ -65,6 +65,8 @@ var (
 
 	aiReview = flag.Bool("ai-review", false, "Use Claude AI to automatically review and categorize transactions")
 
+	bayesianThreshold = flag.Float64("bayesian-threshold", 0.95, "Auto-approve Bayesian predictions above this confidence (0.0-1.0). Set higher to send more transactions to AI review.")
+
 	rtxn = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
 	rfrom  = regexp.MustCompile(`\W*([:\w]+).*`)
@@ -1071,11 +1073,41 @@ func writeReviewJSON(reviewData ReviewData, outputPath string) error {
 func buildAIPrompt(reviewData ReviewData) string {
 	prompt := `You are a financial transaction categorization expert. Your task is to review transactions and categorize them accurately.
 
+**Bayesian Classifier Context:**
+Each transaction includes predictions from a Bayesian classifier trained on historical data. The "categories" field shows the top 5 predicted categories with confidence scores (0-1), sorted by confidence.
+
+**IMPORTANT - Description Quality Assessment:**
+Before trusting Bayesian predictions, evaluate the transaction description quality:
+- CLEAR descriptions: Contain recognizable merchant names, specific services, or obvious category indicators (e.g., "WHOLE FOODS", "SHELL GAS", "NETFLIX")
+- AMBIGUOUS descriptions: Generic terms, codes, abbreviations, or vague text that could apply to multiple categories (e.g., "PAYMENT", "PURCHASE 1234", "SQ *Unknown", "ACH TRANSFER")
+
+**How to use Bayesian predictions:**
+1. HIGH Bayesian confidence (>= 0.8) + CLEAR description:
+   - The prediction is likely correct
+   - Prefer to use it unless the description clearly indicates otherwise
+
+2. HIGH Bayesian confidence (>= 0.8) + AMBIGUOUS description:
+   - BE SKEPTICAL - the Bayesian classifier may be confidently wrong
+   - Ignore the Bayesian prediction and analyze the description carefully
+   - If you cannot determine the category with confidence, mark as uncertain
+
+3. MEDIUM confidence (0.5-0.8):
+   - Use as a suggestion only, regardless of description clarity
+   - Do your own analysis based on the transaction details
+
+4. LOW confidence (< 0.5):
+   - The Bayesian prediction is unreliable
+   - Do your own analysis based on the transaction description
+
 **Decision Rules:**
-1. Analyze the transaction description, amount, and date
-2. Generate your own category choice with confidence score
-3. If your confidence >= 0.7: Use your category, source="ai"
-4. If your confidence < 0.7: Use "Expenses:TODO:Manual", source="uncertain"
+1. First, evaluate if the transaction description is clear or ambiguous
+2. Analyze the transaction description, amount, date, and Bayesian predictions
+3. For high-confidence Bayesian predictions (>= 0.8) with CLEAR descriptions, prefer to use them
+4. For high-confidence Bayesian predictions (>= 0.8) with AMBIGUOUS descriptions, be very skeptical and rely on your own analysis
+5. Generate your own category choice with confidence score
+6. If your confidence >= 0.7: Use your category, source="ai"
+7. If your confidence < 0.7: Use "Expenses:TODO:Manual", source="uncertain"
+8. In your reasoning, mention: (a) whether the description is clear or ambiguous, (b) the Bayesian confidence level, (c) whether you followed or overrode it and why
 
 **Output Format:**
 Return a JSON object with your categorization decisions in the SAME ORDER as the input transactions:
@@ -1086,13 +1118,13 @@ Return a JSON object with your categorization decisions in the SAME ORDER as the
       "category": "Expenses:Food:Groceries",
       "source": "ai",
       "confidence": 0.85,
-      "reasoning": "Clear grocery store purchase"
+      "reasoning": "Clear description (WHOLE FOODS). Bayesian confidence 0.82. Followed prediction."
     },
     {
       "category": "Expenses:TODO:Manual",
       "source": "uncertain",
       "confidence": 0.45,
-      "reasoning": "Ambiguous merchant name"
+      "reasoning": "Ambiguous description (PAYMENT 1234). Bayesian confidence 0.88 but cannot verify category."
     }
   ]
 }
@@ -1102,7 +1134,7 @@ Return a JSON object with your categorization decisions in the SAME ORDER as the
 - "category" should be one of the available categories or "Expenses:TODO:Manual"
 - "source" is either "ai" or "uncertain"
 - "confidence" is between 0 and 1
-- "reasoning" explains your decision (optional for high confidence, required for uncertain)
+- "reasoning" must include: description quality (clear/ambiguous), Bayesian confidence, and your decision rationale
 - IMPORTANT: Return exactly one decision for each transaction in the input
 
 **Transaction Data:**
@@ -1214,11 +1246,11 @@ func convertAIDecisionsToLedger(decisions []AIDecision, txns []Txn) string {
 // processAIReview handles the AI review workflow and returns uncertain transactions for manual review
 func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, model string) ([]Txn, error) {
 	// Split transactions into high-confidence (auto-approve) and low-confidence (needs AI review)
-	const confidenceThreshold = 0.8
+	confidenceThreshold := *bayesianThreshold
 	var highConfidenceTxns []Txn
 	var lowConfidenceTxns []Txn
 
-	fmt.Printf("Analyzing %d transactions...\n", len(txns))
+	fmt.Printf("Analyzing %d transactions with Bayesian threshold %.2f...\n", len(txns), confidenceThreshold)
 
 	for _, t := range txns {
 		// Get Bayesian classifier prediction
@@ -1356,7 +1388,7 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 
 			// Write review JSON for this batch (for debugging/inspection)
 			if batchNum == 0 || *debug {
-				batchReviewPath := fmt.Sprintf("%s.review.batch%d.json", outputPath, batchNum+1)
+				batchReviewPath := fmt.Sprintf("%s.review.batch%d.json", outputPath, batchNum)
 				if err := writeReviewJSONToPath(reviewData, batchReviewPath); err != nil {
 					return nil, err
 				}
