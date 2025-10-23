@@ -419,7 +419,8 @@ func (p *parser) topHits(in string) []bayesian.Class {
 	}
 	mean /= float64(len(scores))
 	for _, score := range scores {
-		stddev += math.Pow(score-mean, 2)
+		diff := score - mean
+		stddev += diff * diff
 	}
 	stddev /= float64(len(scores) - 1)
 	stddev = math.Sqrt(stddev)
@@ -428,7 +429,7 @@ func (p *parser) topHits(in string) []bayesian.Class {
 	result := make([]bayesian.Class, 0, 5)
 	last := pairs[0].score
 	maxResults := min(len(pairs), 5)
-	for i := 0; i < maxResults; i++ {
+	for i := range maxResults {
 		pr := pairs[i]
 		if *debug {
 			fmt.Printf("i=%d s=%f Class=%v\n", i, pr.score, p.classes[pr.pos])
@@ -498,10 +499,10 @@ func parseTransactionsFromCSV(in []byte, accountColIdx int) []Txn {
 
 	if len(*selectCols) > 0 {
 		// Select mode: reject everything, then select specified columns
-		for i := 0; i < totalCols; i++ {
+		for i := range totalCols {
 			columnFilter[i] = false
 		}
-		for _, i := range strings.Split(*selectCols, ",") {
+		for i := range strings.SplitSeq(*selectCols, ",") {
 			pos, err := strconv.Atoi(strings.TrimSpace(i))
 			checkf(err, "Unable to convert to integer: %v", i)
 			if pos < totalCols {
@@ -510,10 +511,10 @@ func parseTransactionsFromCSV(in []byte, accountColIdx int) []Txn {
 		}
 	} else if len(*ignore) > 0 {
 		// Ignore mode: select everything, then reject specified columns
-		for i := 0; i < totalCols; i++ {
+		for i := range totalCols {
 			columnFilter[i] = true
 		}
-		for _, i := range strings.Split(*ignore, ",") {
+		for i := range strings.SplitSeq(*ignore, ",") {
 			pos, err := strconv.Atoi(strings.TrimSpace(i))
 			checkf(err, "Unable to convert to integer: %v", i)
 			if pos < totalCols {
@@ -522,7 +523,7 @@ func parseTransactionsFromCSV(in []byte, accountColIdx int) []Txn {
 		}
 	} else {
 		// No filtering: select all columns
-		for i := 0; i < totalCols; i++ {
+		for i := range totalCols {
 			columnFilter[i] = true
 		}
 	}
@@ -1946,7 +1947,7 @@ func main() {
 	final := p.iterateDB()
 	sort.Sort(byTime(final))
 
-	_, err = of.WriteString(fmt.Sprintf("; into-ledger run at %v\n\n", time.Now()))
+	_, err = fmt.Fprintf(of, "; into-ledger run at %v\n\n", time.Now())
 	checkf(err, "Unable to write into output file: %v", of.Name())
 
 	for _, t := range final {
