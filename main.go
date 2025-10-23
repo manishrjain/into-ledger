@@ -11,7 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math"
 	"os"
@@ -58,19 +57,7 @@ var (
 		" more than N hours apart. Description and amount must also match exactly for"+
 		" a txn to be considered duplicate.")
 
-	pstart = time.Now().Add(-90 * 24 * time.Hour).Format(plaidDate)
-	pend   = time.Now().Format(plaidDate)
-
-	// The following flags are for using Plaid.com integration to auto-fetch txns.
-	usePlaid = flag.Bool("p", false, "Use Plaid to auto-fetch txns."+
-		" You must have set plaid.yaml in conf dir. NOTE: Plaid requires a business to get an API. This feature is DEPRECATED.")
-
-	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
-	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
-	rfrom  = regexp.MustCompile(`\W*([:\w]+).*`)
-	rcur   = regexp.MustCompile(`(\d+\.\d+|\d+)`)
-	racc   = regexp.MustCompile(`^account[\W]+(.*)`)
-	ralias = regexp.MustCompile(`\balias\s(.*)`)
+	racc = regexp.MustCompile(`^account[\W]+(.*)`)
 
 	debugPrefix = "_debug.batch"
 	stamp       = "2006/01/02"
@@ -79,10 +66,6 @@ var (
 	catLength   = 20
 	short       *keys.Shortcuts
 )
-
-type accountFlags struct {
-	flags map[string]string
-}
 
 type configs struct {
 	Accounts map[string]map[string]string // account and the corresponding config.
@@ -162,17 +145,17 @@ func (b byTime) Len() int               { return len(b) }
 func (b byTime) Less(i int, j int) bool { return b[i].Date.Before(b[j].Date) }
 func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
 
-func checkf(err error, format string, args ...interface{}) {
+func checkf(err error, format string, args ...any) {
 	if err != nil {
-		log.Printf(format, args)
+		log.Printf(format, args...)
 		log.Println()
 		log.Fatalf("%+v", errors.WithStack(err))
 	}
 }
 
-func assertf(ok bool, format string, args ...interface{}) {
+func assertf(ok bool, format string, args ...any) {
 	if !ok {
-		log.Printf(format, args)
+		log.Printf(format, args...)
 		log.Println()
 		log.Fatalf("%+v", errors.Errorf("Should be true, but is false"))
 	}
@@ -444,10 +427,7 @@ func (p *parser) topHits(in string) []bayesian.Class {
 	sort.Sort(byScore(pairs))
 	result := make([]bayesian.Class, 0, 5)
 	last := pairs[0].score
-	maxResults := len(pairs)
-	if maxResults > 5 {
-		maxResults = 5
-	}
+	maxResults := min(len(pairs), 5)
 	for i := 0; i < maxResults; i++ {
 		pr := pairs[i]
 		if *debug {
@@ -474,7 +454,7 @@ func includeAll(dir string, data []byte) []byte {
 			continue
 		}
 		fname := strings.Trim(line[8:], " \n")
-		include, err := ioutil.ReadFile(path.Join(dir, fname))
+		include, err := os.ReadFile(path.Join(dir, fname))
 		checkf(err, "Unable to read file: %v", fname)
 		final = append(final, include...)
 	}
@@ -556,7 +536,9 @@ func parseTransactionsFromCSV(in []byte, accountColIdx int) []Txn {
 
 		// Have a unique key for each transaction in CSV, so we can unique identify and
 		// persist them as we modify their category.
-		_, err := rand.Read(t.Key)
+		if _, err := rand.Read(t.Key); err != nil {
+			log.Fatalf("Unable to generate random key: %v", err)
+		}
 		cols, err := r.Read()
 		if err == io.EOF {
 			break
@@ -877,7 +859,7 @@ var lettersOnly = regexp.MustCompile("[^a-zA-Z]+")
 func (p *parser) showAndCategorizeTxns(rtxns []Txn) {
 	txns := rtxns
 	for {
-		for i := 0; i < len(txns); i++ {
+		for i := range len(txns) {
 			t := &txns[i]
 			p.classifyTxn(t)
 			printSummary(*t, i, len(txns))
@@ -979,7 +961,6 @@ func sanitize(a string) string {
 		default:
 			return -1
 		}
-		return -1
 	}, a)
 }
 
@@ -1017,7 +998,7 @@ func (p *parser) categorizeBelow(txns []Txn) []Txn {
 // mathces the regular expressions provided.
 func (p *parser) categorizeByRules(txns []Txn) []Txn {
 	fpath := path.Join(*configDir, "rules.yaml")
-	data, err := ioutil.ReadFile(fpath)
+	data, err := os.ReadFile(fpath)
 	if err != nil {
 		return txns
 	}
@@ -1188,7 +1169,7 @@ func (p *parser) generateReviewData(txns []Txn) ReviewData {
 
 		// Build categories with normalized confidence scores
 		categories := make([]CategoryScore, 0, 5)
-		for i := 0; i < len(pairs) && i < 5; i++ {
+		for i := range min(len(pairs), 5) {
 			pr := pairs[i]
 			confidence := expScores[i] / sumExp
 			categories = append(categories, CategoryScore{
@@ -1326,7 +1307,7 @@ func callClaudeAPI(apiKey string, model string, reviewData ReviewData, outputPat
 	debugDir := path.Dir(outputPath)
 	if *debug {
 		requestPath := path.Join(debugDir, fmt.Sprintf("%s%d.req.txt", debugPrefix, batchNum))
-		if err := ioutil.WriteFile(requestPath, []byte(prompt), 0o644); err != nil {
+		if err := os.WriteFile(requestPath, []byte(prompt), 0o644); err != nil {
 			fmt.Printf("Warning: Unable to write request to %s: %v\n", requestPath, err)
 		} else {
 			fmt.Printf("Request written to: %s\n", requestPath)
@@ -1364,7 +1345,7 @@ func callClaudeAPI(apiKey string, model string, reviewData ReviewData, outputPat
 	// Write response to file for debugging
 	if *debug {
 		responsePath := path.Join(debugDir, fmt.Sprintf("%s%d.resp.txt", debugPrefix, batchNum))
-		if err := ioutil.WriteFile(responsePath, []byte(responseText), 0o644); err != nil {
+		if err := os.WriteFile(responsePath, []byte(responseText), 0o644); err != nil {
 			fmt.Printf("Warning: Unable to write response to %s: %v\n", responsePath, err)
 		} else {
 			fmt.Printf("Response written to: %s\n", responsePath)
@@ -1544,7 +1525,7 @@ func writeReviewJSONToPath(reviewData ReviewData, filePath string) error {
 	if err != nil {
 		return fmt.Errorf("unable to marshal review data: %v", err)
 	}
-	if err := ioutil.WriteFile(filePath, data, 0o644); err != nil {
+	if err := os.WriteFile(filePath, data, 0o644); err != nil {
 		return fmt.Errorf("unable to write review file: %v", err)
 	}
 	if *debug {
@@ -1702,15 +1683,15 @@ account Liabilities:Credit
 `
 
 	// Check if file exists and has content
-	data, err := ioutil.ReadFile(journalPath)
+	data, err := os.ReadFile(journalPath)
 	if err != nil {
 		// File doesn't exist, create it with basic setup
-		return ioutil.WriteFile(journalPath, []byte(basicSetup), 0o644)
+		return os.WriteFile(journalPath, []byte(basicSetup), 0o644)
 	}
 
 	// If file is empty or very small, write the basic setup
 	if len(data) < 10 {
-		return ioutil.WriteFile(journalPath, []byte(basicSetup), 0o644)
+		return os.WriteFile(journalPath, []byte(basicSetup), 0o644)
 	}
 
 	// If file has content, append the basic accounts
@@ -1726,7 +1707,7 @@ account Liabilities:Credit
 
 func cleanupOldDebugFiles(outputPath string) {
 	debugDir := path.Dir(outputPath)
-	files, err := ioutil.ReadDir(debugDir)
+	files, err := os.ReadDir(debugDir)
 	if err != nil {
 		return
 	}
@@ -1755,11 +1736,6 @@ func main() {
 		return
 	}
 
-	if *plaidHist != "" {
-		fmt.Printf("Balance history error: %v\n", BalanceHistory(*account))
-		return
-	}
-
 	defer saneMode()
 	singleCharMode()
 
@@ -1781,7 +1757,7 @@ func main() {
 	}
 
 	configPath := path.Join(*configDir, "config.yaml")
-	data, err := ioutil.ReadFile(configPath)
+	data, err := os.ReadFile(configPath)
 	if err == nil {
 		var c configs
 		checkf(yaml.Unmarshal(data, &c), "Unable to unmarshal yaml config at %v", configPath)
@@ -1814,7 +1790,7 @@ func main() {
 		}
 	}
 
-	data, err = ioutil.ReadFile(*journal)
+	data, err = os.ReadFile(*journal)
 	checkf(err, "Unable to read file: %v", *journal)
 	alldata := includeAll(path.Dir(*journal), data)
 
@@ -1831,7 +1807,7 @@ func main() {
 	// Clean up old debug files from previous runs
 	cleanupOldDebugFiles(*output)
 
-	tf, err := ioutil.TempFile("", "ledger-csv-txns")
+	tf, err := os.CreateTemp("", "ledger-csv-txns")
 	checkf(err, "Unable to create temp file")
 	defer os.Remove(tf.Name())
 
@@ -1857,23 +1833,13 @@ func main() {
 	p.generateClasses()
 
 	var txns []Txn
-	switch {
-	case *usePlaid:
-		var err error
-		txns, err = GetPlaidTransactions(*account)
-		checkf(err, "Couldn't get plaid txns")
-		for i := range txns {
-			txns[i].CurName = *currency
-		}
-
-	case len(*csvFile) > 0:
-		in, err := os.ReadFile(*csvFile)
-		checkf(err, "Unable to read csv file: %v", *csvFile)
-		txns = parseTransactionsFromCSV(in, accountColIdx)
-
-	default:
-		assertf(false, "Please specify either a CSV flag or a Plaid flag")
+	if len(*csvFile) == 0 {
+		oerr("Please specify a CSV file with the -csv flag")
+		return
 	}
+	in, err := os.ReadFile(*csvFile)
+	checkf(err, "Unable to read csv file: %v", *csvFile)
+	txns = parseTransactionsFromCSV(in, accountColIdx)
 
 	// Assign accounts to transactions
 	for i := range txns {
@@ -1966,11 +1932,12 @@ func main() {
 		// All AI-categorized transactions will be shown for manual review
 		txns = reviewTxns
 
-		fmt.Printf("\n" + strings.Repeat("=", 70) + "\n")
-		fmt.Printf("MANUAL REVIEW OF AI CATEGORIZATIONS\n")
-		fmt.Printf(strings.Repeat("=", 70) + "\n\n")
+		fmt.Println("\n" + strings.Repeat("=", 70))
+		fmt.Println("MANUAL REVIEW OF AI CATEGORIZATIONS")
+		fmt.Println(strings.Repeat("=", 70) + "\n")
 		fmt.Printf("All %d transactions are ready for your review.\n", len(txns))
-		fmt.Printf("AI reasoning is displayed for each transaction to help with your decision.\n\n")
+		fmt.Println("AI reasoning is displayed for each transaction to help with your decision.")
+		fmt.Println()
 	}
 
 	// Original interactive mode
