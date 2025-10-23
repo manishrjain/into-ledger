@@ -128,7 +128,7 @@ func BalanceHistory(account string) error {
 	case "0":
 		balance = 0
 	default:
-		return fmt.Errorf("Invalid value for phist flag: %q", *plaidHist)
+		return fmt.Errorf("invalid value for phist flag: %q", *plaidHist)
 	}
 
 	fmt.Printf("Got account: %+v\n", pp.Accounts[0])

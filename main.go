@@ -48,13 +48,13 @@ var (
 	skip      = flag.Int("skip", 0, "Number of header lines in CSV to skip")
 	configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
 		"Config directory to store various into-ledger configs in.")
-	shortcuts = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
-	smallBelow = flag.Float64("below", 0.0, "Use Expenses:Small category for txns below this amount.")
-	aiReview = flag.Bool("ai-review", true, "Use Claude AI to automatically review and categorize transactions")
+	shortcuts         = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
+	smallBelow        = flag.Float64("below", 0.0, "Use Expenses:Small category for txns below this amount.")
+	aiReview          = flag.Bool("ai-review", true, "Use Claude AI to automatically review and categorize transactions")
 	bayesianThreshold = flag.Float64("bayesian-threshold", 1.1, "Auto-approve Bayesian predictions above this confidence (0.0-1.0). Set higher to send more transactions to AI review.")
-	batchSize = flag.Int("batch-size", 100, "Number of transactions to send to Claude API per batch (default 100). Higher values reduce API calls but increase prompt size.")
-	limitTxns = flag.Int("limit", 100, "Maximum number of transactions to process per run after deduplication (0 = unlimited). Helps avoid losing work on crashes.")
-	dupWithin = flag.Int("within", 24, "Consider txns to be dups, if their dates are not"+
+	batchSize         = flag.Int("batch-size", 50, "Number of transactions to send to Claude API per batch. Max 8192 tokens ÷ 150 tokens/decision ≈ 54, using 50 for safety.")
+	limitTxns         = flag.Int("limit", 50, "Maximum number of transactions to process per run after deduplication (0 = unlimited). Helps avoid losing work on crashes.")
+	dupWithin         = flag.Int("within", 24, "Consider txns to be dups, if their dates are not"+
 		" more than N hours apart. Description and amount must also match exactly for"+
 		" a txn to be considered duplicate.")
 
@@ -63,9 +63,9 @@ var (
 
 	// The following flags are for using Plaid.com integration to auto-fetch txns.
 	usePlaid = flag.Bool("p", false, "Use Plaid to auto-fetch txns."+
-	" You must have set plaid.yaml in conf dir. NOTE: Plaid requires a business to get an API. This feature is DEPRECATED.")
+		" You must have set plaid.yaml in conf dir. NOTE: Plaid requires a business to get an API. This feature is DEPRECATED.")
 
-	rtxn = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
+	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
 	rfrom  = regexp.MustCompile(`\W*([:\w]+).*`)
 	rcur   = regexp.MustCompile(`(\d+\.\d+|\d+)`)
@@ -73,11 +73,11 @@ var (
 	ralias = regexp.MustCompile(`\balias\s(.*)`)
 
 	debugPrefix = "_debug.batch"
-	stamp      = "2006/01/02"
-	bucketName = []byte("txns")
-	descLength = 40
-	catLength  = 20
-	short      *keys.Shortcuts
+	stamp       = "2006/01/02"
+	bucketName  = []byte("txns")
+	descLength  = 40
+	catLength   = 20
+	short       *keys.Shortcuts
 )
 
 type accountFlags struct {
@@ -118,9 +118,9 @@ type ExampleTransaction struct {
 
 // CategoryInfo represents a category with its metadata
 type CategoryInfo struct {
-	Name     string                 `json:"name"`
-	Comment  string                 `json:"comment,omitempty"`
-	Examples []ExampleTransaction   `json:"examples,omitempty"`
+	Name     string               `json:"name"`
+	Comment  string               `json:"comment,omitempty"`
+	Examples []ExampleTransaction `json:"examples,omitempty"`
 }
 
 // ReviewData is the structure sent to AI for review
@@ -131,10 +131,9 @@ type ReviewData struct {
 
 // AIDecision represents the AI's categorization decision for a transaction
 type AIDecision struct {
-	Category   string  `json:"category"`
-	Source     string  `json:"source"`      // "ai" or "uncertain"
-	Confidence float64 `json:"confidence"`
-	Reasoning  string  `json:"reasoning,omitempty"`
+	SuggestedCategories []CategoryScore `json:"suggested_categories"` // Up to 3 categories with confidence scores, sorted by confidence
+	Source              string          `json:"source"`               // "ai" or "uncertain"
+	Reasoning           string          `json:"reasoning,omitempty"`
 }
 
 // AIResponse is the response from Claude API
@@ -152,8 +151,9 @@ type Txn struct {
 	Key                []byte
 	skipClassification bool
 	Done               bool
-	Account            string // Account from CSV (e.g., "Chase Bank - JAIN CHK (8987)")
-	AIReason           string // AI's reasoning for categorization (for manual review context)
+	Account            string          // Account from CSV (e.g., "Chase Bank - JAIN CHK (8987)")
+	AIReason           string          // AI's reasoning for categorization (for manual review context)
+	AISuggestions      []CategoryScore // AI suggested categories with confidence scores (up to 3)
 }
 
 type byTime []Txn
@@ -300,9 +300,10 @@ func (p *parser) parseAccounts() {
 // parseAccountMappings parses comments in the ledger file to find mappings
 // from CSV account identifiers to ledger accounts.
 // Expected format in ledger file:
-//   account Assets:Checking
-//     ; csv-account: CHK
-//     ; csv-account: checking
+//
+//	account Assets:Checking
+//	  ; csv-account: CHK
+//	  ; csv-account: checking
 func (p *parser) parseAccountMappings() {
 	p.accountMapping = make(map[string]string)
 	s := bufio.NewScanner(bytes.NewReader(p.data))
@@ -414,9 +415,11 @@ type byScore []pair
 func (b byScore) Len() int {
 	return len(b)
 }
+
 func (b byScore) Less(i int, j int) bool {
 	return b[i].score > b[j].score
 }
+
 func (b byScore) Swap(i int, j int) {
 	b[i], b[j] = b[j], b[i]
 }
@@ -509,10 +512,10 @@ func parseTransactionsFromCSV(in []byte, accountColIdx int) []Txn {
 
 	// Reset reader
 	r = csv.NewReader(bytes.NewReader(in))
-	
+
 	// Build column filter: true = include column, false = exclude column
 	columnFilter := make(map[int]bool)
-	
+
 	if len(*selectCols) > 0 {
 		// Select mode: reject everything, then select specified columns
 		for i := 0; i < totalCols; i++ {
@@ -579,10 +582,8 @@ func parseTransactionsFromCSV(in []byte, accountColIdx int) []Txn {
 			picked = append(picked, col)
 			if date, ok := parseDate(col); ok {
 				t.Date = date
-
 			} else if f, ok := parseCurrency(col); ok {
 				t.Cur = f
-
 			} else if d, ok := parseDescription(col); ok {
 				t.Desc = d
 			}
@@ -691,7 +692,6 @@ func (p *parser) writeToDB(t Txn) {
 		enc := gob.NewEncoder(&val)
 		checkf(enc.Encode(t), "Unable to encode txn: %v", t)
 		return b.Put(t.Key, val.Bytes())
-
 	}); err != nil {
 		log.Fatalf("Write to db failed with error: %v", err)
 	}
@@ -773,7 +773,7 @@ LOOP:
 			}
 			fmt.Println("Opening Google search in browser...")
 			time.Sleep(500 * time.Millisecond) // Brief pause to show message
-			return 0 // Stay on same transaction
+			return 0                           // Stay on same transaction
 		}
 
 		category = append(category, opt)
@@ -811,13 +811,40 @@ func (p *parser) categorizeTxn(t *Txn, idx, total int) float64 {
 		color.New(color.BgCyan, color.FgBlack).Printf("[AI] %s", t.AIReason)
 		fmt.Println()
 	}
+	// Display AI suggestions if present
+	if len(t.AISuggestions) > 0 {
+		color.New(color.BgMagenta, color.FgWhite).Printf("[AI SUGGESTIONS]")
+		fmt.Println()
+		for i, suggestion := range t.AISuggestions {
+			color.New(color.FgCyan).Printf("  %d. ", i+1)
+			color.New(color.FgYellow).Printf("%-40s", suggestion.Category)
+			color.New(color.FgGreen).Printf(" (%.2f%%)", suggestion.Confidence*100)
+			fmt.Println()
+		}
+	}
 	fmt.Println()
 
 	hits := p.topHits(t.Desc)
 	var ks keys.Shortcuts
 	setDefaultMappings(&ks)
+
+	// Track categories we've already assigned to avoid duplicates
+	assigned := make(map[string]bool)
+
+	// First, add AI suggestions if available
+	if len(t.AISuggestions) > 0 {
+		for _, suggestion := range t.AISuggestions {
+			ks.AutoAssign(suggestion.Category, "default")
+			assigned[suggestion.Category] = true
+		}
+	}
+	// Then add Bayesian hits (skip if already assigned from AI)
 	for _, hit := range hits {
-		ks.AutoAssign(string(hit), "default")
+		category := string(hit)
+		if !assigned[category] {
+			ks.AutoAssign(category, "default")
+			assigned[category] = true
+		}
 	}
 	res := p.printAndGetResult(ks, t)
 	if res != math.MaxFloat32 {
@@ -981,8 +1008,10 @@ func (p *parser) categorizeBelow(txns []Txn) []Txn {
 // Expenses:Travel:
 //   - regexp-for-description
 //   - ^LYFT\ +\*RIDE
+//
 // Expenses:Food:
 //   - ^STARBUCKS
+//
 // ...
 // If this file is present, txns would be auto-categorized, if their description
 // mathces the regular expressions provided.
@@ -1228,10 +1257,9 @@ Before trusting Bayesian predictions, evaluate the transaction description quali
 2. Analyze the transaction description, amount, date, and Bayesian predictions
 3. For high-confidence Bayesian predictions (>= 0.8) with CLEAR descriptions, prefer to use them
 4. For high-confidence Bayesian predictions (>= 0.8) with AMBIGUOUS descriptions, be very skeptical and rely on your own analysis
-5. Generate your own category choice with confidence score
-6. If your confidence >= 0.7: Use your category, source="ai"
-7. If your confidence < 0.7: Use "Expenses:TODO:Manual", source="uncertain"
-8. In your reasoning, mention: (a) whether the description is clear or ambiguous, (b) the Bayesian confidence level, (c) whether you followed or overrode it and why
+5. ALWAYS generate up to 3 most likely category suggestions with confidence scores (0-1), sorted by confidence descending
+6. If top suggestion confidence >= 0.7: source="ai", otherwise source="uncertain"
+7. Keep reasoning BRIEF (5-15 words max). Format: "Clear/Ambiguous. Bayesian=X.XX. [Followed/Overrode]: reason"
 
 **Output Format:**
 Return a JSON object with your categorization decisions in the SAME ORDER as the input transactions:
@@ -1239,26 +1267,33 @@ Return a JSON object with your categorization decisions in the SAME ORDER as the
 {
   "decisions": [
     {
-      "category": "Expenses:Food:Groceries",
+      "suggested_categories": [
+        {"category": "Expenses:Food:Groceries", "confidence": 0.85},
+        {"category": "Expenses:Food:Restaurant", "confidence": 0.10},
+        {"category": "Expenses:Shopping", "confidence": 0.05}
+      ],
       "source": "ai",
-      "confidence": 0.85,
-      "reasoning": "Clear description (WHOLE FOODS). Bayesian confidence 0.82. Followed prediction."
+      "reasoning": "Clear. Bayesian=0.82. Followed."
     },
     {
-      "category": "Expenses:TODO:Manual",
+      "suggested_categories": [
+        {"category": "Expenses:TODO:Manual", "confidence": 0.45},
+        {"category": "Expenses:Shopping", "confidence": 0.30},
+        {"category": "Expenses:Food", "confidence": 0.25}
+      ],
       "source": "uncertain",
-      "confidence": 0.45,
-      "reasoning": "Ambiguous description (PAYMENT 1234). Bayesian confidence 0.88 but cannot verify category."
+      "reasoning": "Ambiguous. Bayesian=0.88. Cannot verify."
     }
   ]
 }
 
 **Rules:**
 - Return decisions in the SAME ORDER as input transactions (array index corresponds to transaction)
-- "category" should be one of the available categories or "Expenses:TODO:Manual"
-- "source" is either "ai" or "uncertain"
-- "confidence" is between 0 and 1
-- "reasoning" must include: description quality (clear/ambiguous), Bayesian confidence, and your decision rationale
+- Each decision must have "suggested_categories" with 1-3 category suggestions, sorted by confidence descending
+- Each suggestion has "category" (one of the available categories or "Expenses:TODO:Manual") and "confidence" (0-1)
+- "source" is "ai" if top confidence >= 0.7, otherwise "uncertain"
+- "reasoning" must be BRIEF (5-10 words): description quality, Bayesian confidence, and decision
+- Confidence scores should sum to approximately 1.0 but don't need to be exact
 - IMPORTANT: Return exactly one decision for each transaction in the input
 
 **Transaction Data:**
@@ -1291,7 +1326,7 @@ func callClaudeAPI(apiKey string, model string, reviewData ReviewData, outputPat
 	debugDir := path.Dir(outputPath)
 	if *debug {
 		requestPath := path.Join(debugDir, fmt.Sprintf("%s%d.req.txt", debugPrefix, batchNum))
-		if err := ioutil.WriteFile(requestPath, []byte(prompt), 0644); err != nil {
+		if err := ioutil.WriteFile(requestPath, []byte(prompt), 0o644); err != nil {
 			fmt.Printf("Warning: Unable to write request to %s: %v\n", requestPath, err)
 		} else {
 			fmt.Printf("Request written to: %s\n", requestPath)
@@ -1310,7 +1345,6 @@ func callClaudeAPI(apiKey string, model string, reviewData ReviewData, outputPat
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
 	})
-
 	if err != nil {
 		return emptyResponse, fmt.Errorf("claude API call failed: %v", err)
 	}
@@ -1330,7 +1364,7 @@ func callClaudeAPI(apiKey string, model string, reviewData ReviewData, outputPat
 	// Write response to file for debugging
 	if *debug {
 		responsePath := path.Join(debugDir, fmt.Sprintf("%s%d.resp.txt", debugPrefix, batchNum))
-		if err := ioutil.WriteFile(responsePath, []byte(responseText), 0644); err != nil {
+		if err := ioutil.WriteFile(responsePath, []byte(responseText), 0o644); err != nil {
 			fmt.Printf("Warning: Unable to write response to %s: %v\n", responsePath, err)
 		} else {
 			fmt.Printf("Response written to: %s\n", responsePath)
@@ -1430,12 +1464,9 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 		// Batch size for API calls
 		totalBatches := (len(lowConfidenceTxns) + *batchSize - 1) / *batchSize
 
-		for batchNum := 0; batchNum < totalBatches; batchNum++ {
+		for batchNum := range totalBatches {
 			start := batchNum * *batchSize
-			end := start + *batchSize
-			if end > len(lowConfidenceTxns) {
-				end = len(lowConfidenceTxns)
-			}
+			end := min(start+*batchSize, len(lowConfidenceTxns))
 
 			batch := lowConfidenceTxns[start:end]
 			fmt.Printf("Processing batch %d/%d (%d transactions)...\n", batchNum+1, totalBatches, len(batch))
@@ -1465,13 +1496,30 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 			// Store AI decisions in transactions and add to allTxns
 			for i, decision := range aiResponse.Decisions {
 				t := batch[i]
-				// Store AI reasoning
-				t.AIReason = fmt.Sprintf("AI: confidence=%.2f, %s", decision.Confidence, decision.Reasoning)
-				// Apply the category
+
+				// Ensure we have at least one suggested category
+				if len(decision.SuggestedCategories) == 0 {
+					log.Printf("Warning: No suggested categories for transaction %d in batch %d", i, batchNum)
+					continue
+				}
+
+				// Sort suggestions by confidence (descending) - should already be sorted from AI
+				sort.Slice(decision.SuggestedCategories, func(i, j int) bool {
+					return decision.SuggestedCategories[i].Confidence > decision.SuggestedCategories[j].Confidence
+				})
+
+				// Store AI suggestions for display in UI
+				t.AISuggestions = decision.SuggestedCategories
+
+				// Use top suggestion as the category
+				topCategory := decision.SuggestedCategories[0]
+				t.AIReason = fmt.Sprintf("AI: confidence=%.2f, %s", topCategory.Confidence, decision.Reasoning)
+
+				// Apply the top category
 				if t.Cur > 0 {
-					t.From = decision.Category
+					t.From = topCategory.Category
 				} else {
-					t.To = decision.Category
+					t.To = topCategory.Category
 				}
 				allTxns = append(allTxns, t)
 			}
@@ -1496,7 +1544,7 @@ func writeReviewJSONToPath(reviewData ReviewData, filePath string) error {
 	if err != nil {
 		return fmt.Errorf("unable to marshal review data: %v", err)
 	}
-	if err := ioutil.WriteFile(filePath, data, 0644); err != nil {
+	if err := ioutil.WriteFile(filePath, data, 0o644); err != nil {
 		return fmt.Errorf("unable to write review file: %v", err)
 	}
 	if *debug {
@@ -1565,36 +1613,36 @@ func validateJournalSetup(journalPath string, data []byte) error {
 	// Check if journal file exists
 	if _, err := os.Stat(journalPath); os.IsNotExist(err) {
 		// Create directory if it doesn't exist
-		if err := os.MkdirAll(path.Dir(journalPath), 0755); err != nil {
+		if err := os.MkdirAll(path.Dir(journalPath), 0o755); err != nil {
 			return fmt.Errorf("unable to create directory for journal file: %v", err)
 		}
 		return fmt.Errorf("journal file does not exist")
 	}
-	
+
 	// Try to run ledger csv command to see if the journal is valid
 	cmd := exec.Command("ledger", "-f", journalPath, "csv")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("journal file is not valid or has no transactions: %v", err)
 	}
-	
+
 	// Check if there are any transactions with categories
 	if len(output) == 0 {
 		return fmt.Errorf("journal file contains no transactions with categories")
 	}
-	
+
 	// If data is provided, check if the journal has account declarations for basic categories
 	if data != nil {
 		dataStr := string(data)
 		hasExpenses := strings.Contains(dataStr, "account Expenses")
 		hasAssets := strings.Contains(dataStr, "account Assets")
 		hasIncome := strings.Contains(dataStr, "account Income")
-		
+
 		if !hasExpenses && !hasAssets && !hasIncome {
 			return fmt.Errorf("journal file lacks basic account categories (Assets, Income, Expenses)")
 		}
 	}
-	
+
 	return nil
 }
 
@@ -1603,11 +1651,11 @@ func askUserToSetupJournal() bool {
 	fmt.Println("Your journal file appears to be empty or lacks basic account categories.")
 	fmt.Println("Would you like me to create basic account categories in your journal? (Y/n)")
 	fmt.Print("This will add common accounts like Assets, Income, and Expenses: ")
-	
+
 	var response string
 	fmt.Scanln(&response)
 	response = strings.ToLower(strings.TrimSpace(response))
-	
+
 	return response == "" || response == "y" || response == "yes"
 }
 
@@ -1652,26 +1700,26 @@ account Liabilities:Credit
     Assets:Checking
 
 `
-	
+
 	// Check if file exists and has content
 	data, err := ioutil.ReadFile(journalPath)
 	if err != nil {
 		// File doesn't exist, create it with basic setup
-		return ioutil.WriteFile(journalPath, []byte(basicSetup), 0644)
+		return ioutil.WriteFile(journalPath, []byte(basicSetup), 0o644)
 	}
-	
+
 	// If file is empty or very small, write the basic setup
 	if len(data) < 10 {
-		return ioutil.WriteFile(journalPath, []byte(basicSetup), 0644)
+		return ioutil.WriteFile(journalPath, []byte(basicSetup), 0o644)
 	}
-	
+
 	// If file has content, append the basic accounts
-	file, err := os.OpenFile(journalPath, os.O_APPEND|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(journalPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	
+
 	_, err = file.WriteString("\n" + basicSetup)
 	return err
 }
@@ -1715,7 +1763,7 @@ func main() {
 	defer saneMode()
 	singleCharMode()
 
-	checkf(os.MkdirAll(*configDir, 0755), "Unable to create directory: %v", *configDir)
+	checkf(os.MkdirAll(*configDir, 0o755), "Unable to create directory: %v", *configDir)
 
 	// Parse account flag: check if it's an integer (column index) or string (account name)
 	accountColIdx := -1
@@ -1787,7 +1835,7 @@ func main() {
 	checkf(err, "Unable to create temp file")
 	defer os.Remove(tf.Name())
 
-	db, err := bolt.Open(tf.Name(), 0600, nil)
+	db, err := bolt.Open(tf.Name(), 0o600, nil)
 	checkf(err, "Unable to open boltdb at %v", tf.Name())
 	defer db.Close()
 
@@ -1797,7 +1845,7 @@ func main() {
 		return nil
 	})
 
-	of, err := os.OpenFile(*output, os.O_APPEND|os.O_WRONLY, 0600)
+	of, err := os.OpenFile(*output, os.O_APPEND|os.O_WRONLY, 0o600)
 	checkf(err, "Unable to open output file: %v", *output)
 
 	p := parser{data: alldata, db: db}
@@ -1819,7 +1867,7 @@ func main() {
 		}
 
 	case len(*csvFile) > 0:
-		in, err := ioutil.ReadFile(*csvFile)
+		in, err := os.ReadFile(*csvFile)
 		checkf(err, "Unable to read csv file: %v", *csvFile)
 		txns = parseTransactionsFromCSV(in, accountColIdx)
 
@@ -1897,7 +1945,7 @@ func main() {
 
 		// Read config for AI settings if available
 		configPath := path.Join(*configDir, "config.yaml")
-		if configData, err := ioutil.ReadFile(configPath); err == nil {
+		if configData, err := os.ReadFile(configPath); err == nil {
 			var c configs
 			if err := yaml.Unmarshal(configData, &c); err == nil {
 				if len(c.AI.APIKey) > 0 {
