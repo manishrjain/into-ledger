@@ -36,38 +36,34 @@ import (
 
 var (
 	debug      = flag.Bool("debug", true, "Additional debug information if set.")
-	journal    = flag.String("j", "", "Existing journal to learn from.")
-	output     = flag.String("o", "", "Journal file to write to. Defaults to the journal file (-j) if not specified.")
+	journal    = flag.String("in", "", "Existing journal to learn from.")
+	output     = flag.String("out", "", "Journal file to write to. Defaults to the journal file (-j) if not specified.")
 	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
-	account    = flag.String("a", "", "Account name (e.g., 'Assets:Checking') or CSV column index (e.g., '6') for account field. When using column index, add csv-account mappings in ledger file.")
+	account    = flag.String("account", "", "Account name (e.g., 'Assets:Checking') or CSV column index (e.g., '6') for account field. When using column index, add csv-account mappings in ledger file.")
 	currency   = flag.String("currency", "$", "Set currency if any.")
-	ignore     = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
-	selectCols = flag.String("sc", "", "Comma separated list of columns to select from CSV (e.g., '0,1,5' for columns 0, 1, and 5).")
-	dateFormat = flag.String("d", "01/02/2006",
+	ignore     = flag.String("cols-ignore", "", "Comma separated list of columns to ignore in CSV.")
+	selectCols = flag.String("cols-select", "", "Comma separated list of columns to select from CSV (e.g., '0,1,5' for columns 0, 1, and 5).")
+	dateFormat = flag.String("date", "01/02/2006",
 		"Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
-	skip      = flag.Int("s", 0, "Number of header lines in CSV to skip")
+	skip      = flag.Int("skip", 0, "Number of header lines in CSV to skip")
 	configDir = flag.String("conf", os.Getenv("HOME")+"/.into-ledger",
 		"Config directory to store various into-ledger configs in.")
 	shortcuts = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
+	smallBelow = flag.Float64("below", 0.0, "Use Expenses:Small category for txns below this amount.")
+	aiReview = flag.Bool("ai-review", true, "Use Claude AI to automatically review and categorize transactions")
+	bayesianThreshold = flag.Float64("bayesian-threshold", 1.1, "Auto-approve Bayesian predictions above this confidence (0.0-1.0). Set higher to send more transactions to AI review.")
+	batchSize = flag.Int("batch-size", 100, "Number of transactions to send to Claude API per batch (default 100). Higher values reduce API calls but increase prompt size.")
+	limitTxns = flag.Int("limit", 100, "Maximum number of transactions to process per run after deduplication (0 = unlimited). Helps avoid losing work on crashes.")
+	dupWithin = flag.Int("within", 24, "Consider txns to be dups, if their dates are not"+
+		" more than N hours apart. Description and amount must also match exactly for"+
+		" a txn to be considered duplicate.")
 
 	pstart = time.Now().Add(-90 * 24 * time.Hour).Format(plaidDate)
 	pend   = time.Now().Format(plaidDate)
 
 	// The following flags are for using Plaid.com integration to auto-fetch txns.
 	usePlaid = flag.Bool("p", false, "Use Plaid to auto-fetch txns."+
-		" You must have set plaid.yaml in conf dir.")
-
-	dupWithin = flag.Int("within", 24, "Consider txns to be dups, if their dates are not"+
-		" more than N hours apart. Description and amount must also match exactly for"+
-		" a txn to be considered duplicate.")
-
-	smallBelow = flag.Float64("below", 0.0, "Use Expenses:Small category for txns below this amount.")
-
-	aiReview = flag.Bool("ai-review", false, "Use Claude AI to automatically review and categorize transactions")
-
-	bayesianThreshold = flag.Float64("bayesian-threshold", 1.1, "Auto-approve Bayesian predictions above this confidence (0.0-1.0). Set higher to send more transactions to AI review.")
-
-	batchSize = flag.Int("batch-size", 100, "Number of transactions to send to Claude API per batch (default 100). Higher values reduce API calls but increase prompt size.")
+	" You must have set plaid.yaml in conf dir. NOTE: Plaid requires a business to get an API. This feature is DEPRECATED.")
 
 	rtxn = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -76,6 +72,7 @@ var (
 	racc   = regexp.MustCompile(`^account[\W]+(.*)`)
 	ralias = regexp.MustCompile(`\balias\s(.*)`)
 
+	debugPrefix = "_debug.batch"
 	stamp      = "2006/01/02"
 	bucketName = []byte("txns")
 	descLength = 40
@@ -1291,8 +1288,9 @@ func callClaudeAPI(apiKey string, model string, reviewData ReviewData, outputPat
 	prompt := buildAIPrompt(reviewData)
 
 	// Write request (prompt) to file for debugging
+	debugDir := path.Dir(outputPath)
 	if *debug {
-		requestPath := fmt.Sprintf("%s.batch%d.ai-req.txt", outputPath, batchNum)
+		requestPath := path.Join(debugDir, fmt.Sprintf("%s%d.req.txt", debugPrefix, batchNum))
 		if err := ioutil.WriteFile(requestPath, []byte(prompt), 0644); err != nil {
 			fmt.Printf("Warning: Unable to write request to %s: %v\n", requestPath, err)
 		} else {
@@ -1331,7 +1329,7 @@ func callClaudeAPI(apiKey string, model string, reviewData ReviewData, outputPat
 
 	// Write response to file for debugging
 	if *debug {
-		responsePath := fmt.Sprintf("%s.batch%d.ai-resp.txt", outputPath, batchNum)
+		responsePath := path.Join(debugDir, fmt.Sprintf("%s%d.resp.txt", debugPrefix, batchNum))
 		if err := ioutil.WriteFile(responsePath, []byte(responseText), 0644); err != nil {
 			fmt.Printf("Warning: Unable to write response to %s: %v\n", responsePath, err)
 		} else {
@@ -1678,6 +1676,28 @@ account Liabilities:Credit
 	return err
 }
 
+func cleanupOldDebugFiles(outputPath string) {
+	debugDir := path.Dir(outputPath)
+	files, err := ioutil.ReadDir(debugDir)
+	if err != nil {
+		return
+	}
+
+	var removed int
+	for _, file := range files {
+		if strings.HasPrefix(file.Name(), debugPrefix) {
+			filePath := path.Join(debugDir, file.Name())
+			if err := os.Remove(filePath); err == nil {
+				removed++
+			}
+		}
+	}
+
+	if removed > 0 && *debug {
+		fmt.Printf("Cleaned up %d old debug files\n", removed)
+	}
+}
+
 func main() {
 	flag.Parse()
 
@@ -1759,6 +1779,9 @@ func main() {
 		_, err := os.Create(*output)
 		checkf(err, "Unable to check for output file: %v", *output)
 	}
+
+	// Clean up old debug files from previous runs
+	cleanupOldDebugFiles(*output)
 
 	tf, err := ioutil.TempFile("", "ledger-csv-txns")
 	checkf(err, "Unable to create temp file")
@@ -1844,6 +1867,14 @@ func main() {
 	}
 
 	txns = p.removeDuplicates(txns) // sorts by date.
+
+	// Apply transaction limit if specified
+	if *limitTxns > 0 && len(txns) > *limitTxns {
+		fmt.Printf("\n")
+		color.New(color.BgYellow, color.FgBlack).Printf(" LIMIT ")
+		fmt.Printf(" Processing %d of %d transactions (limit=%d)\n", *limitTxns, len(txns), *limitTxns)
+		txns = txns[:*limitTxns]
+	}
 
 	// Now sort by description for the rest of the categorizers.
 	sort.Slice(txns, func(i, j int) bool {
