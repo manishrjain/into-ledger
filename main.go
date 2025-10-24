@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	yaml "gopkg.in/yaml.v2"
@@ -1510,30 +1511,66 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 		// Batch size for API calls
 		totalBatches := (len(lowConfidenceTxns) + *batchSize - 1) / *batchSize
 
+		// Semaphore to limit concurrent API calls to 4
+		semaphore := make(chan struct{}, 4)
+		var wg sync.WaitGroup
+
+		// Store results from each batch
+		type batchResult struct {
+			batchNum  int
+			batch     []Txn
+			decisions []AIDecision
+			err       error
+		}
+		results := make([]batchResult, totalBatches)
+
 		for batchNum := range totalBatches {
-			start := batchNum * *batchSize
-			end := min(start+*batchSize, len(lowConfidenceTxns))
+			wg.Add(1)
+			go func(batchNum int) {
+				defer wg.Done()
 
-			batch := lowConfidenceTxns[start:end]
-			fmt.Printf("Processing batch %d/%d (%d transactions)...\n", batchNum+1, totalBatches, len(batch))
+				// Acquire semaphore
+				semaphore <- struct{}{}
+				defer func() { <-semaphore }()
 
-			// Generate review data for this batch
-			reviewData := p.generateReviewData(batch)
+				start := batchNum * *batchSize
+				end := min(start+*batchSize, len(lowConfidenceTxns))
 
-			// Call Claude API for this batch
-			aiResponse, err := callClaudeAPI(apiKey, model, reviewData, outputPath, batchNum)
-			if err != nil {
-				return nil, fmt.Errorf("batch %d failed: %v", batchNum+1, err)
+				batch := lowConfidenceTxns[start:end]
+				fmt.Printf("Processing batch idx %d out of %d (%d transactions)...\n", batchNum, totalBatches, len(batch))
+
+				// Generate review data for this batch
+				reviewData := p.generateReviewData(batch)
+
+				// Call Claude API for this batch
+				aiResponse, err := callClaudeAPI(apiKey, model, reviewData, outputPath, batchNum)
+
+				// Store result
+				if err != nil {
+					results[batchNum] = batchResult{batchNum: batchNum, batch: batch, err: err}
+				} else {
+					results[batchNum] = batchResult{batchNum: batchNum, batch: batch, decisions: aiResponse.Decisions}
+				}
+			}(batchNum)
+		}
+
+		// Wait for all batches to complete
+		wg.Wait()
+
+		// Process results in order
+		for batchNum, result := range results {
+			if result.err != nil {
+				return nil, fmt.Errorf("batch %d failed: %v", batchNum+1, result.err)
 			}
 
 			// Validate we got the right number of decisions
-			assertf(len(aiResponse.Decisions) == len(batch),
+			assertf(len(result.decisions) == len(result.batch),
 				"Claude returned %d decisions for %d transactions in batch %d",
-				len(aiResponse.Decisions), len(batch), batchNum+1)
+				len(result.decisions), len(result.batch), batchNum)
 
 			// Store AI decisions in transactions and add to allTxns
-			for i, decision := range aiResponse.Decisions {
-				t := batch[i]
+			for i, decision := range result.decisions {
+				t := result.batch[i]
 
 				// Ensure we have at least one suggested category
 				if len(decision.SuggestedCategories) == 0 {
@@ -1563,7 +1600,7 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 			}
 
 			fmt.Printf("Batch %d/%d: %d transactions categorized by AI\n",
-				batchNum+1, totalBatches, len(batch))
+				batchNum+1, totalBatches, len(result.batch))
 		}
 	}
 
