@@ -145,6 +145,13 @@ func (b byTime) Len() int               { return len(b) }
 func (b byTime) Less(i int, j int) bool { return b[i].Date.Before(b[j].Date) }
 func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
 
+func (t Txn) getCategory() string {
+	if t.Cur > 0 {
+		return t.From
+	}
+	return t.To
+}
+
 func checkf(err error, format string, args ...any) {
 	if err != nil {
 		log.Printf(format, args...)
@@ -432,7 +439,7 @@ func (p *parser) topHits(in string) []bayesian.Class {
 	for i := range maxResults {
 		pr := pairs[i]
 		if *debug {
-			fmt.Printf("i=%d s=%f Class=%v\n", i, pr.score, p.classes[pr.pos])
+			// fmt.Printf("i=%d s=%f Class=%v\n", i, pr.score, p.classes[pr.pos])
 		}
 		if math.Abs(pr.score-last) > stddev {
 			break
@@ -610,11 +617,10 @@ func saneMode() {
 
 func getCategory(t Txn) (prefix, cat string) {
 	prefix = "[TO]"
-	cat = t.To
 	if t.Cur > 0 {
 		prefix = "[FROM]"
-		cat = t.From
 	}
+	cat = t.getCategory()
 	return
 }
 
@@ -655,9 +661,9 @@ func printSummary(t Txn, idx, total int) {
 		desc = desc[:descLength]
 	}
 	color.New(color.BgWhite, color.FgBlack).Printf(" %-40s", desc) // descLength used in Printf.
+	color.New(color.BgRed, color.FgWhite).Printf(" %9.2f %3s ", t.Cur, t.CurName)
 	printCategory(t)
 
-	color.New(color.BgRed, color.FgWhite).Printf(" %9.2f %3s ", t.Cur, t.CurName)
 	fmt.Println()
 }
 
@@ -859,70 +865,128 @@ var lettersOnly = regexp.MustCompile("[^a-zA-Z]+")
 
 func (p *parser) showAndCategorizeTxns(rtxns []Txn) {
 	txns := rtxns
-	for {
-		for i := range len(txns) {
-			t := &txns[i]
-			p.classifyTxn(t)
-			printSummary(*t, i, len(txns))
+
+	// Classify all transactions first
+	for i := range len(txns) {
+		t := &txns[i]
+		p.classifyTxn(t)
+	}
+
+	// Sort by category, then by date within each category
+	sort.Slice(txns, func(i, j int) bool {
+		catI := txns[i].getCategory()
+		catJ := txns[j].getCategory()
+		if catI != catJ {
+			return catI < catJ
+		}
+		return txns[i].Date.Before(txns[j].Date)
+	})
+
+	applyToSimilarTxns := func(from int) int {
+		t := txns[from]
+		src := lettersOnly.ReplaceAllString(t.Desc, "")
+		for i := from + 1; i < len(txns); i++ {
+			dst := &txns[i]
+			if src != lettersOnly.ReplaceAllString(dst.Desc, "") {
+				return i
+			}
+			if math.Signbit(t.Cur) != math.Signbit(dst.Cur) {
+				return i
+			}
+
+			if t.Cur > 0 {
+				dst.From = t.From
+			} else {
+				dst.To = t.To
+			}
+			dst.Done = true
+		}
+		return len(txns)
+	}
+
+	// Process transactions category by category
+	for i := 0; i < len(txns); {
+		// Get current category
+		currentCat := txns[i].getCategory()
+
+		// Find the end of this category
+		categoryEnd := i + 1
+		for categoryEnd < len(txns) {
+			if txns[categoryEnd].getCategory() != currentCat {
+				break
+			}
+			categoryEnd++
+		}
+
+		// Display this category
+		clear()
+		color.New(color.BgGreen, color.FgBlack).Printf(" %s ", currentCat)
+		fmt.Printf(" (%d transactions)\n", categoryEnd-i)
+		fmt.Println()
+
+		for j := i; j < categoryEnd; j++ {
+			printSummary(txns[j], j-i, categoryEnd-i)
 		}
 		fmt.Println()
 
-		fmt.Printf("Found %d transactions. Review (Y/n/q)? ", len(txns))
+		// Ask for bulk approval
+		fmt.Printf("Bulk approve all %d transactions in %s? (Y/n/q): ", categoryEnd-i, currentCat)
 		b := make([]byte, 1)
 		os.Stdin.Read(b)
-		if b[0] == 'n' || b[0] == 'q' {
+
+		if b[0] == 'q' {
 			return
-		}
-
-		applyToSimilarTxns := func(from int) int {
-			t := txns[from]
-			src := lettersOnly.ReplaceAllString(t.Desc, "")
-			for i := from + 1; i < len(txns); i++ {
-				dst := &txns[i]
-				if src != lettersOnly.ReplaceAllString(dst.Desc, "") {
-					return i
-				}
-				if math.Signbit(t.Cur) != math.Signbit(dst.Cur) {
-					return i
-				}
-
-				if t.Cur > 0 {
-					dst.From = t.From
-				} else {
-					dst.To = t.To
-				}
-				dst.Done = true
+		} else if b[0] == 'Y' || b[0] == 'y' || b[0] == '\n' {
+			// Bulk approve all transactions in this category
+			for j := i; j < categoryEnd; j++ {
+				txns[j].Done = true
+				p.writeToDB(txns[j])
 			}
-			return len(txns)
-		}
+			color.New(color.BgGreen, color.FgBlack).Printf(" ✓ Approved %d transactions ", categoryEnd-i)
+			fmt.Println()
+			time.Sleep(500 * time.Millisecond)
+			i = categoryEnd
+		} else {
+			// Go one-by-one through this category
+			clear()
+			color.New(color.BgYellow, color.FgBlack).Printf(" REVIEWING: %s ", currentCat)
+			fmt.Printf(" (one by one)\n")
+			fmt.Println()
 
-		for i := 0; i < len(txns) && i >= 0; {
-			t := &txns[i]
-			res := p.categorizeTxn(t, i, len(txns))
-			if res == 1.0 {
-				upto := applyToSimilarTxns(i)
-				if upto == i+1 {
-					// Did not find anything.
+			for i < categoryEnd && i >= 0 {
+				t := &txns[i]
+				res := p.categorizeTxn(t, i, len(txns))
+				if res == 999999.0 {
+					return
+				}
+				if res == 1.0 {
+					upto := applyToSimilarTxns(i)
+					if upto > i+1 {
+						clear()
+						printSummary(txns[i], i, len(txns))
+						for j := i + 1; j < upto; j++ {
+							printSummary(txns[j], j, len(txns))
+							p.writeToDB(txns[j])
+						}
+						fmt.Println()
+						fmt.Println("The above txns were similar to the last categorized txn, " +
+							"and were categorized accordingly. Can be changed by skipping back and forth.")
+						r := make([]byte, 1)
+						os.Stdin.Read(r)
+						i = upto
+					} else {
+						i += int(res)
+					}
+				} else {
 					i += int(res)
-					continue
 				}
-				clear()
-				printSummary(txns[i], i, len(txns))
-				for j := i + 1; j < upto; j++ {
-					printSummary(txns[j], j, len(txns))
-					p.writeToDB(txns[j])
-				}
-				fmt.Println()
-				fmt.Println("The above txns were similar to the last categorized txns, " +
-					"and were categorized accordingly. Can be changed by skipping back and forth.")
-				r := make([]byte, 1)
-				os.Stdin.Read(r)
-				i = upto
-			} else {
-				i += int(res)
 			}
 		}
 	}
+
+	fmt.Println()
+	color.New(color.BgGreen, color.FgBlack).Printf(" %d TXNS PROCESSED ", len(txns))
+	fmt.Println()
 }
 
 func ledgerFormat(t Txn) string {
@@ -1241,7 +1305,7 @@ Before trusting Bayesian predictions, evaluate the transaction description quali
 4. For high-confidence Bayesian predictions (>= 0.8) with AMBIGUOUS descriptions, be very skeptical and rely on your own analysis
 5. ALWAYS generate up to 3 most likely category suggestions with confidence scores (0-1), sorted by confidence descending
 6. If top suggestion confidence >= 0.7: source="ai", otherwise source="uncertain"
-7. Keep reasoning BRIEF (5-15 words max). Format: "Clear/Ambiguous. Bayesian=X.XX. [Followed/Overrode]: reason"
+7. Keep reasoning short but clear. Format: "Clear/Ambiguous. Bayesian=X.XX. Explain choice"
 
 **Output Format:**
 Return a JSON object with your categorization decisions in the SAME ORDER as the input transactions:
@@ -1255,7 +1319,7 @@ Return a JSON object with your categorization decisions in the SAME ORDER as the
         {"category": "Expenses:Shopping", "confidence": 0.05}
       ],
       "source": "ai",
-      "reasoning": "Clear. Bayesian=0.82. Followed."
+      "reasoning": "Clear. Bayesian=0.82. Clearly indicates grocery store (WHOLE FOODS)."
     },
     {
       "suggested_categories": [
@@ -1264,7 +1328,7 @@ Return a JSON object with your categorization decisions in the SAME ORDER as the
         {"category": "Expenses:Food", "confidence": 0.25}
       ],
       "source": "uncertain",
-      "reasoning": "Ambiguous. Bayesian=0.88. Cannot verify."
+      "reasoning": "Ambiguous. Bayesian=0.88. Description lacks identifying details."
     }
   ]
 }
@@ -1456,14 +1520,6 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 			// Generate review data for this batch
 			reviewData := p.generateReviewData(batch)
 
-			// Write review JSON for this batch (for debugging/inspection)
-			if batchNum == 0 || *debug {
-				batchReviewPath := fmt.Sprintf("%s.review.batch%d.json", outputPath, batchNum)
-				if err := writeReviewJSONToPath(reviewData, batchReviewPath); err != nil {
-					return nil, err
-				}
-			}
-
 			// Call Claude API for this batch
 			aiResponse, err := callClaudeAPI(apiKey, model, reviewData, outputPath, batchNum)
 			if err != nil {
@@ -1518,21 +1574,6 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 	fmt.Printf("\nAll transactions will be presented for manual review.\n")
 
 	return allTxns, nil
-}
-
-// writeReviewJSONToPath writes review data to a specific path
-func writeReviewJSONToPath(reviewData ReviewData, filePath string) error {
-	data, err := json.MarshalIndent(reviewData, "", "  ")
-	if err != nil {
-		return fmt.Errorf("unable to marshal review data: %v", err)
-	}
-	if err := os.WriteFile(filePath, data, 0o644); err != nil {
-		return fmt.Errorf("unable to write review file: %v", err)
-	}
-	if *debug {
-		fmt.Printf("Review data written to: %s\n", filePath)
-	}
-	return nil
 }
 
 func (p *parser) removeDuplicates(txns []Txn) []Txn {
