@@ -41,8 +41,8 @@ var (
 	csvFile    = flag.String("csv", "", "File path of CSV file containing new transactions.")
 	account    = flag.String("account", "", "Account name (e.g., 'Assets:Checking') or CSV column index (e.g., '6') for account field. When using column index, add csv-account mappings in ledger file.")
 	currency   = flag.String("currency", "$", "Set currency if any.")
-	ignore     = flag.String("cols-ignore", "", "Comma separated list of columns to ignore in CSV.")
-	selectCols = flag.String("cols-select", "", "Comma separated list of columns to select from CSV (e.g., '0,1,5' for columns 0, 1, and 5).")
+	ignore     = flag.String("cols-ignore", "", "Comma separated list of columns to ignore in CSV. Starts from 0.")
+	selectCols = flag.String("cols-select", "", "Comma separated list of columns to select from CSV. Starts from 0. (e.g., '0,1,5' for columns 0, 1, and 5).")
 	dateFormat = flag.String("date", "01/02/2006",
 		"Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
 	skip      = flag.Int("skip", 0, "Number of header lines in CSV to skip")
@@ -85,6 +85,7 @@ type CategoryScore struct {
 
 // ReviewTransaction represents a transaction for AI review
 type ReviewTransaction struct {
+	ID          int             `json:"id"` // Unique identifier for matching response to request
 	Date        string          `json:"date"`
 	Description string          `json:"description"`
 	Amount      float64         `json:"amount"`
@@ -115,6 +116,7 @@ type ReviewData struct {
 
 // AIDecision represents the AI's categorization decision for a transaction
 type AIDecision struct {
+	ID                  int             `json:"id"`                   // Must match the transaction ID from the request
 	SuggestedCategories []CategoryScore `json:"suggested_categories"` // Up to 3 categories with confidence scores, sorted by confidence
 	Source              string          `json:"source"`               // "ai" or "uncertain"
 	Reasoning           string          `json:"reasoning,omitempty"`
@@ -155,6 +157,7 @@ func (t Txn) getCategory() string {
 
 func checkf(err error, format string, args ...any) {
 	if err != nil {
+		saneMode()
 		log.Printf(format, args...)
 		log.Println()
 		log.Fatalf("%+v", errors.WithStack(err))
@@ -163,6 +166,7 @@ func checkf(err error, format string, args ...any) {
 
 func assertf(ok bool, format string, args ...any) {
 	if !ok {
+		saneMode()
 		log.Printf(format, args...)
 		log.Println()
 		log.Fatalf("%+v", errors.Errorf("Should be true, but is false"))
@@ -545,9 +549,8 @@ func parseTransactionsFromCSV(in []byte, accountColIdx int) []Txn {
 
 		// Have a unique key for each transaction in CSV, so we can unique identify and
 		// persist them as we modify their category.
-		if _, err := rand.Read(t.Key); err != nil {
-			log.Fatalf("Unable to generate random key: %v", err)
-		}
+		_, err := rand.Read(t.Key)
+		checkf(err, "Unable to generate random key")
 		cols, err := r.Read()
 		if err == io.EOF {
 			break
@@ -653,7 +656,7 @@ func printSummary(t Txn, idx, total int) {
 		// A bit of a hack, but will do.
 		color.New(color.BgBlue, color.FgWhite).Printf(" [DUPLICATE] ")
 	} else {
-		log.Fatalf("Unhandled case for total: %v", total)
+		assertf(false, "Unhandled case for total: %v", total)
 	}
 
 	color.New(color.BgYellow, color.FgBlack).Printf(" %10s ", t.Date.Format(stamp))
@@ -683,7 +686,7 @@ func (p *parser) writeToDB(t Txn) {
 		checkf(enc.Encode(t), "Unable to encode txn: %v", t)
 		return b.Put(t.Key, val.Bytes())
 	}); err != nil {
-		log.Fatalf("Write to db failed with error: %v", err)
+		checkf(err, "Write to db failed")
 	}
 }
 
@@ -695,14 +698,12 @@ func (p *parser) iterateDB() []Txn {
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			var t Txn
 			dec := gob.NewDecoder(bytes.NewBuffer(v))
-			if err := dec.Decode(&t); err != nil {
-				log.Fatalf("Unable to parse txn from value of length: %v. Error: %v", len(v), err)
-			}
+			checkf(dec.Decode(&t), "Unable to parse txn from value of length: %v", len(v))
 			txns = append(txns, t)
 		}
 		return nil
 	}); err != nil {
-		log.Fatalf("Iterate over db failed with error: %v", err)
+		checkf(err, "Iterate over db failed")
 	}
 	return txns
 }
@@ -1205,7 +1206,7 @@ func (p *parser) generateReviewData(txns []Txn) ReviewData {
 		AllCategories: allCategories,
 	}
 
-	for _, t := range txns {
+	for i, t := range txns {
 		// Get Bayesian classifier predictions
 		terms := prepareDescriptionForClassification(t.Desc)
 		scores, _, _ := p.cl.LogScores(terms)
@@ -1245,6 +1246,7 @@ func (p *parser) generateReviewData(txns []Txn) ReviewData {
 		}
 
 		reviewTxn := ReviewTransaction{
+			ID:          i + 1, // 1-indexed for clarity in prompts
 			Date:        t.Date.Format("2006-01-02"),
 			Description: t.Desc,
 			Amount:      t.Cur,
@@ -1309,11 +1311,12 @@ Before trusting Bayesian predictions, evaluate the transaction description quali
 7. Keep reasoning short but clear. Format: "Clear/Ambiguous. Bayesian=X.XX. Explain choice"
 
 **Output Format:**
-Return a JSON object with your categorization decisions in the SAME ORDER as the input transactions:
+Return a JSON object with your categorization decisions. Each decision MUST include the "id" field matching the transaction's id:
 
 {
   "decisions": [
     {
+      "id": 1,
       "suggested_categories": [
         {"category": "Expenses:Food:Groceries", "confidence": 0.85},
         {"category": "Expenses:Food:Restaurant", "confidence": 0.10},
@@ -1323,6 +1326,7 @@ Return a JSON object with your categorization decisions in the SAME ORDER as the
       "reasoning": "Clear. Bayesian=0.82. Clearly indicates grocery store (WHOLE FOODS)."
     },
     {
+      "id": 2,
       "suggested_categories": [
         {"category": "Expenses:TODO:Manual", "confidence": 0.45},
         {"category": "Expenses:Shopping", "confidence": 0.30},
@@ -1335,7 +1339,7 @@ Return a JSON object with your categorization decisions in the SAME ORDER as the
 }
 
 **Rules:**
-- Return decisions in the SAME ORDER as input transactions (array index corresponds to transaction)
+- CRITICAL: Each decision MUST include "id" matching the transaction's id field from the input
 - Each decision must have "suggested_categories" with 1-3 category suggestions, sorted by confidence descending
 - Each suggestion has "category" (one of the available categories or "Expenses:TODO:Manual") and "confidence" (0-1)
 - "source" is "ai" if top confidence >= 0.7, otherwise "uncertain"
@@ -1563,18 +1567,35 @@ func (p *parser) processAIReview(txns []Txn, outputPath string, apiKey string, m
 				return nil, fmt.Errorf("batch %d failed: %v", batchNum+1, result.err)
 			}
 
-			// Validate we got the right number of decisions
-			assertf(len(result.decisions) == len(result.batch),
-				"Claude returned %d decisions for %d transactions in batch %d",
-				len(result.decisions), len(result.batch), batchNum)
+			// Build a map of decisions by ID for robust matching
+			decisionMap := make(map[int]AIDecision)
+			for _, decision := range result.decisions {
+				decisionMap[decision.ID] = decision
+			}
 
-			// Store AI decisions in transactions and add to allTxns
-			for i, decision := range result.decisions {
-				t := result.batch[i]
+			if len(result.decisions) != len(result.batch) {
+				log.Printf("Warning: Claude returned %d decisions for %d transactions in batch %d (using ID matching)",
+					len(result.decisions), len(result.batch), batchNum)
+			}
+
+			// Store AI decisions in transactions using ID-based matching
+			for i, t := range result.batch {
+				txnID := i + 1 // IDs are 1-indexed
+				decision, found := decisionMap[txnID]
+
+				if !found {
+					// No decision for this transaction - mark for manual review
+					log.Printf("Warning: No AI decision for transaction ID %d in batch %d", txnID, batchNum)
+					t.AIReason = "AI: missing from response, needs manual review"
+					allTxns = append(allTxns, t)
+					continue
+				}
 
 				// Ensure we have at least one suggested category
 				if len(decision.SuggestedCategories) == 0 {
-					log.Printf("Warning: No suggested categories for transaction %d in batch %d", i, batchNum)
+					log.Printf("Warning: No suggested categories for transaction ID %d in batch %d", txnID, batchNum)
+					t.AIReason = "AI: no suggestions returned"
+					allTxns = append(allTxns, t)
 					continue
 				}
 
@@ -2004,9 +2025,7 @@ func main() {
 
 		// Process with AI and get all transactions for manual review
 		reviewTxns, err := p.processAIReview(txns, *output, apiKey, model)
-		if err != nil {
-			log.Fatalf("AI review failed: %v", err)
-		}
+		checkf(err, "AI review failed")
 
 		// All AI-categorized transactions will be shown for manual review
 		txns = reviewTxns
@@ -2029,9 +2048,8 @@ func main() {
 	checkf(err, "Unable to write into output file: %v", of.Name())
 
 	for _, t := range final {
-		if _, err := of.WriteString(ledgerFormat(t)); err != nil {
-			log.Fatalf("Unable to write to output: %v", err)
-		}
+		_, err := of.WriteString(ledgerFormat(t))
+		checkf(err, "Unable to write to output: %v", of.Name())
 	}
 	fmt.Printf("Transactions written to file: %s\n", of.Name())
 	checkf(of.Close(), "Unable to close output file: %v", of.Name())
